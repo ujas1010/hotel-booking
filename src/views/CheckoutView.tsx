@@ -42,7 +42,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
   onBackToRoom,
   onBookingSuccess,
 }) => {
-  const { user, profile, apiFetch } = useAuth();
+  const { user, profile, token, apiFetch } = useAuth();
   const [authModalOpen, setAuthModalOpen] = useState(false);
 
   // Step Tracker: 1: Guest Info, 2: Luxury Addons, 3: Payment
@@ -290,6 +290,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
 
       const bookingPayload = {
         roomId: room.id,
+        userId: user?.uid || (guestEmail ? `guest_${guestEmail.replace(/[^a-zA-Z0-9]/g, '_')}` : `guest_${Date.now()}`),
         checkInDate,
         checkOutDate,
         checkIn: checkInDate,
@@ -311,7 +312,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         guestPhone: `+91 ${guestPhone.trim()}`,
       };
 
-      const confirmedBooking = await ApiService.createBooking(bookingPayload);
+      const confirmedBooking = await ApiService.createBooking(bookingPayload, token);
       onBookingSuccess(confirmedBooking);
     } catch (err: any) {
       console.error('Checkout error:', err);

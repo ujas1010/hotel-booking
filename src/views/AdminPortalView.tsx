@@ -70,7 +70,7 @@ interface AdminPortalViewProps {
 }
 
 export const AdminPortalView: React.FC<AdminPortalViewProps> = ({ onRefreshRooms }) => {
-  const { user, profile, isAdmin, loginAsAdmin, logoutAdmin, apiFetch } = useAuth();
+  const { user, profile, isAdmin, adminToken, token, loginAsAdmin, logoutAdmin, apiFetch } = useAuth();
 
   // Admin login gate states
   const [adminEmail, setAdminEmail] = useState('');
@@ -148,7 +148,7 @@ export const AdminPortalView: React.FC<AdminPortalViewProps> = ({ onRefreshRooms
       }
 
       // 2. Fetch Bookings
-      const bookingsData = await ApiService.getBookings(undefined, undefined, undefined, true);
+      const bookingsData = await ApiService.getBookings(undefined, undefined, adminToken || token, true);
       const activeBookings = bookingsData || ClientStore.getBookings();
       setBookings(activeBookings);
 

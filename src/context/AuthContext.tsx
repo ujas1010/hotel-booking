@@ -4,8 +4,12 @@ import {
   signInWithPopup,
   signOut as firebaseSignOut,
   onAuthStateChanged,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updateProfile as updateFirebaseProfile,
 } from 'firebase/auth';
 import { auth, googleAuthProvider } from '../lib/firebase.ts';
+import { FirestoreService } from '../services/firestoreService.ts';
 import { UserProfile } from '../types.ts';
 
 export interface AppUser {
@@ -156,50 +160,67 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     restoreSession();
   }, []);
 
-  // Database Sign Up
+  // Database & Firebase Sign Up
   const signUpWithEmail = async (data: { name: string; email: string; password: string; phone?: string }) => {
     try {
       setLoading(true);
-      let userData: any = null;
-      let userProfile: any = null;
-      let sessionToken = `user_token_${Date.now()}`;
-      let isAdm = false;
+      const cleanEmail = data.email.trim().toLowerCase();
+      let fbUser: FirebaseUser | null = null;
 
+      // 1. Authenticate with real Firebase Auth
       try {
-        const res = await fetch('/api/auth/signup', {
+        const userCred = await createUserWithEmailAndPassword(auth, cleanEmail, data.password);
+        fbUser = userCred.user;
+        if (data.name) {
+          await updateFirebaseProfile(fbUser, { displayName: data.name });
+        }
+      } catch (fbErr: any) {
+        console.warn('Firebase Auth sign-up notice:', fbErr);
+        if (fbErr.code === 'auth/email-already-in-use') {
+          return { success: false, error: 'This email is already registered in Firebase. Please log in.' };
+        }
+        if (fbErr.code === 'auth/weak-password') {
+          return { success: false, error: 'Password should be at least 6 characters long.' };
+        }
+        if (fbErr.code === 'auth/invalid-email') {
+          return { success: false, error: 'Please enter a valid email address.' };
+        }
+        if (fbErr.code === 'auth/operation-not-allowed') {
+          console.warn('Email/Password provider not yet enabled in Firebase console.');
+        }
+      }
+
+      const uid = fbUser?.uid || `guest_${Math.random().toString(36).substring(2, 9)}`;
+      const sessionToken = fbUser ? await fbUser.getIdToken() : `user_token_${Date.now()}`;
+      const isAdm = cleanEmail === 'davekaran2006@gmail.com' || cleanEmail.includes('admin');
+
+      const userProfile: UserProfile = {
+        id: Date.now(),
+        uid,
+        email: cleanEmail,
+        name: data.name,
+        phone: data.phone || null,
+        address: null,
+        country: 'India',
+        avatar: null,
+        role: isAdm ? 'admin' : 'guest',
+        loyaltyPoints: 100,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      // 2. Persist profile to Cloud Firestore
+      await FirestoreService.saveUserProfile(uid, userProfile);
+
+      // 3. Optional backend synchronization
+      try {
+        await fetch('/api/auth/signup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(data),
         });
-
-        if (res.ok) {
-          const resData剩下 = await res.json();
-          sessionToken = resData剩下.token;
-          userData = resData剩下.user;
-          userProfile = resData剩下.profile;
-          isAdm = resData剩下.isAdmin;
-        }
       } catch {
-        // Fallback for static hosting environments
-      }
-
-      if (!userData) {
-        const uid = `guest_${Math.random().toString(36).substring(2, 9)}`;
-        userData = {
-          uid,
-          email: data.email.toLowerCase(),
-          name: data.name,
-        };
-        userProfile = {
-          id: Date.now(),
-          uid,
-          email: data.email.toLowerCase(),
-          name: data.name,
-          phone: data.phone || '',
-          role: 'user',
-          loyaltyTier: 'Silver Member',
-          loyaltyPoints: 100,
-        };
+        // Backend not running on static host
       }
 
       setToken(sessionToken);
@@ -210,32 +231,70 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       setUser({
-        uid: userData.uid,
-        email: userData.email,
-        displayName: userData.name,
-        phoneNumber: userProfile?.phone,
-        photoURL: userProfile?.avatar,
+        uid,
+        email: cleanEmail,
+        displayName: data.name,
+        phoneNumber: data.phone,
       });
       setProfile(userProfile);
 
       return { success: true };
     } catch (err: any) {
       console.error('Sign up error:', err);
-      return { success: false, error: err.message || 'Network error during sign up.' };
+      return { success: false, error: err.message || 'Error during sign up.' };
     } finally {
       setLoading(false);
     }
   };
 
-  // Database Login
+  // Database & Firebase Login
   const loginWithEmail = async (credentials: { email: string; password: string }) => {
     try {
       setLoading(true);
-      let userData: any = null;
-      let userProfile: any = null;
-      let sessionToken = `user_token_${Date.now()}`;
-      let isAdm去掉 = false;
+      const cleanEmail = credentials.email.trim().toLowerCase();
+      let fbUser: FirebaseUser | null = null;
+      let isAdm = cleanEmail === 'davekaran2006@gmail.com' || cleanEmail.includes('admin');
 
+      // 1. Authenticate with real Firebase Auth
+      try {
+        const userCred = await signInWithEmailAndPassword(auth, cleanEmail, credentials.password);
+        fbUser = userCred.user;
+      } catch (fbErr: any) {
+        console.warn('Firebase Auth login notice:', fbErr);
+        if (fbErr.code === 'auth/wrong-password' || fbErr.code === 'auth/invalid-credential') {
+          return { success: false, error: 'Invalid email or password.' };
+        }
+        if (fbErr.code === 'auth/user-not-found') {
+          return { success: false, error: 'No account found with this email. Please sign up.' };
+        }
+      }
+
+      const uid = fbUser?.uid || `user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`;
+      const sessionToken = fbUser ? await fbUser.getIdToken() : `user_token_${Date.now()}`;
+
+      // 2. Fetch or create Firestore user profile
+      let loadedProfile = await FirestoreService.getUserProfile(uid);
+      if (!loadedProfile) {
+        const namePart = cleanEmail.split('@')[0];
+        const displayName = fbUser?.displayName || (namePart.charAt(0).toUpperCase() + namePart.slice(1));
+        loadedProfile = {
+          id: Date.now(),
+          uid,
+          email: cleanEmail,
+          name: displayName,
+          role: isAdm ? 'admin' : 'guest',
+          phone: null,
+          address: null,
+          country: 'India',
+          avatar: null,
+          loyaltyPoints: 250,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        await FirestoreService.saveUserProfile(uid, loadedProfile);
+      }
+
+      // 3. Optional backend synchronization
       try {
         const res = await fetch('/api/auth/login', {
           method: 'POST',
@@ -245,36 +304,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         if (res.ok) {
           const resData = await res.json();
-          sessionToken = resData.token;
-          userData = resData.user;
-          userProfile = resData.profile;
-          isAdm去掉 = resData.isAdmin;
+          if (resData.profile) loadedProfile = resData.profile;
+          if (resData.isAdmin) isAdm = true;
         }
       } catch {
         // Fallback for static environments
-      }
-
-      if (!userData) {
-        const namePart = credentials.email.split('@')[0];
-        const displayName = namePart.charAt(0).toUpperCase() + namePart.slice(1);
-        const uid区别 = `user_${credentials.email.replace(/[^a-zA-Z0-9]/g, '_')}`;
-        userData = {
-          uid: uid区别,
-          email: credentials.email.toLowerCase(),
-          name: displayName,
-        };
-        userProfile = {
-          id: Date.now(),
-          uid: uid区别,
-          email: credentials.email.toLowerCase(),
-          name: displayName,
-          role: credentials.email.includes('admin') ? 'admin' : 'user',
-          loyaltyTier: 'Gold Member',
-          loyaltyPoints: 250,
-        };
-        if (credentials.email.includes('admin')) {
-          isAdm去掉 = true;
-        }
       }
 
       setToken(sessionToken);
@@ -285,15 +319,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       setUser({
-        uid: userData.uid,
-        email: userData.email,
-        displayName: userData.name,
-        phoneNumber: userProfile?.phone,
-        photoURL: userProfile?.avatar,
+        uid,
+        email: cleanEmail,
+        displayName: loadedProfile.name || fbUser?.displayName || cleanEmail.split('@')[0],
+        phoneNumber: loadedProfile.phone,
+        photoURL: fbUser?.photoURL || loadedProfile.avatar,
       });
-      setProfile(userProfile);
+      setProfile(loadedProfile);
 
-      if (isAdm去掉) {
+      if (isAdm) {
         setAdminToken(sessionToken);
         try {
           localStorage.setItem('grand_imperial_admin_token', sessionToken);
@@ -302,10 +336,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
 
-      return { success: true, isAdmin: isAdm去掉 };
+      return { success: true, isAdmin: isAdm };
     } catch (err: any) {
       console.error('Login error:', err);
-      return { success: false, error: err.message || 'Network error during login.' };
+      return { success: false, error: err.message || 'Error during login.' };
     } finally {
       setLoading(false);
     }
@@ -425,21 +459,60 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.warn(err);
       }
 
-      const res = await fetch('/api/user/sync', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          name: firebaseUser.displayName,
-          avatar: firebaseUser.photoURL,
-        }),
-      });
+      const cleanEmail = firebaseUser.email?.toLowerCase() || '';
+      const isAdm = cleanEmail === 'davekaran2006@gmail.com' || cleanEmail.includes('admin');
 
-      if (res.ok) {
-        const userProfile: UserProfile = await res.json();
-        setProfile(userProfile);
+      // 1. Fetch from Firestore or build user profile
+      let userProfile = await FirestoreService.getUserProfile(firebaseUser.uid);
+      if (!userProfile) {
+        userProfile = {
+          id: Date.now(),
+          uid: firebaseUser.uid,
+          email: cleanEmail,
+          name: firebaseUser.displayName || cleanEmail.split('@')[0] || 'Palace Guest',
+          avatar: firebaseUser.photoURL || null,
+          phone: firebaseUser.phoneNumber || null,
+          address: null,
+          country: 'India',
+          role: isAdm ? 'admin' : 'guest',
+          loyaltyPoints: 100,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        await FirestoreService.saveUserProfile(firebaseUser.uid, userProfile);
+      }
+
+      // 2. Sync to backend API if available
+      try {
+        const res = await fetch('/api/user/sync', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({
+            name: firebaseUser.displayName,
+            avatar: firebaseUser.photoURL,
+          }),
+        });
+
+        if (res.ok) {
+          const backendProfile: UserProfile = await res.json();
+          userProfile = { ...userProfile, ...backendProfile };
+        }
+      } catch {
+        // Backend not running on static deployment
+      }
+
+      setProfile(userProfile);
+
+      if (isAdm) {
+        setAdminToken(idToken);
+        try {
+          localStorage.setItem('grand_imperial_admin_token', idToken);
+        } catch (err) {
+          console.warn(err);
+        }
       }
     } catch (error) {
       console.error('Failed to sync profile with database:', error);

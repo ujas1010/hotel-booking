@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Room, Review } from '../types.ts';
 import { useAuth } from '../context/AuthContext.tsx';
+import { ApiService } from '../services/api.ts';
 import {
   ArrowLeft,
   Star,
@@ -50,7 +51,7 @@ export const RoomDetailView: React.FC<RoomDetailViewProps> = ({
   initialCheckOut,
   initialGuests,
 }) => {
-  const { user, apiFetch } = useAuth();
+  const { user, token, apiFetch } = useAuth();
 
   const [checkInDate, setCheckInDate] = useState(initialCheckIn);
   const [checkOutDate, setCheckOutDate] = useState(initialCheckOut);
@@ -64,6 +65,7 @@ export const RoomDetailView: React.FC<RoomDetailViewProps> = ({
   const [newComment, setNewComment] = useState('');
   const [submittingReview, setSubmittingReview] = useState(false);
   const [reviewSuccessMsg, setReviewSuccessMsg] = useState('');
+  const [reviewErrorMsg, setReviewErrorMsg] = useState('');
 
   let images: string[] = [];
   try {
@@ -125,28 +127,24 @@ export const RoomDetailView: React.FC<RoomDetailViewProps> = ({
     e.preventDefault();
     if (!newComment.trim()) return;
     setSubmittingReview(true);
+    setReviewErrorMsg('');
+    setReviewSuccessMsg('');
     try {
-      const res = await apiFetch('/api/reviews', {
-        method: 'POST',
-        body: JSON.stringify({
-          roomId: room.id,
-          rating: newRating,
-          comment: newComment,
-        }),
-      });
+      const created = await ApiService.createReview({
+        roomId: room.id,
+        rating: newRating,
+        comment: newComment.trim(),
+        guestName: user?.displayName || user?.email?.split('@')[0] || 'Palace Guest',
+      }, token);
 
-      if (res.ok) {
-        const created: Review = await res.json();
-        setReviews([created, ...reviews]);
-        setNewComment('');
-        setReviewSuccessMsg('Dhanyavaad! Your review was recorded in PostgreSQL database.');
-        setTimeout(() => setReviewSuccessMsg(''), 4000);
-      } else {
-        const err = await res.json();
-        alert(err.error || 'Failed to post review. Please sign in.');
-      }
-    } catch (err) {
+      setReviews([created, ...reviews]);
+      setNewComment('');
+      setReviewSuccessMsg('Dhanyavaad! Your review was recorded successfully.');
+      setTimeout(() => setReviewSuccessMsg(''), 4500);
+    } catch (err: any) {
       console.error('Failed to submit review:', err);
+      setReviewErrorMsg(err.message || 'Failed to post review. Please ensure you are signed in.');
+      setTimeout(() => setReviewErrorMsg(''), 5000);
     } finally {
       setSubmittingReview(false);
     }
@@ -340,6 +338,12 @@ export const RoomDetailView: React.FC<RoomDetailViewProps> = ({
               {reviewSuccessMsg && (
                 <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 p-2.5 rounded-lg">
                   {reviewSuccessMsg}
+                </p>
+              )}
+
+              {reviewErrorMsg && (
+                <p className="text-xs text-rose-800 bg-rose-50 border border-rose-200 p-2.5 rounded-lg">
+                  {reviewErrorMsg}
                 </p>
               )}
             </form>

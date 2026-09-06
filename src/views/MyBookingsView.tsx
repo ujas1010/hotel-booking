@@ -30,7 +30,7 @@ export const MyBookingsView: React.FC<MyBookingsViewProps> = ({
   onExploreRooms,
   onViewBookingDetails,
 }) => {
-  const { user, apiFetch, loginWithGoogle } = useAuth();
+  const { user, token, apiFetch, loginWithGoogle } = useAuth();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterTab, setFilterTab] = useState<'all' | 'confirmed' | 'checked_in' | 'past' | 'cancelled'>('all');
@@ -47,11 +47,11 @@ export const MyBookingsView: React.FC<MyBookingsViewProps> = ({
   const fetchUserBookings = async () => {
     setLoading(true);
     try {
-      const data = await ApiService.getBookings(user?.uid, user?.email);
+      const data = await ApiService.getBookings(user?.uid, user?.email || undefined, token);
       setBookings(data || []);
     } catch (err) {
       console.error('Failed to fetch user bookings:', err);
-      const local = ClientStore.getBookingsByUser(user?.uid, user?.email);
+      const local = ClientStore.getBookingsByUser(user?.uid, user?.email || undefined);
       setBookings(local);
     } finally {
       setLoading(false);

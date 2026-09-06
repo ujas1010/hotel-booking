@@ -1,4 +1,5 @@
 import { ClientStore } from './clientStore.ts';
+import { FirestoreService } from './firestoreService.ts';
 import { Room, Booking, Review, HotelSettings } from '../types.ts';
 
 // Helper to check if response is valid JSON (not HTML fallback from static host)
@@ -71,6 +72,7 @@ export const ApiService = {
 
   // Create booking
   async createBooking(bookingData: any, token?: string | null): Promise<Booking> {
+    let created: Booking | null = null;
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -89,14 +91,24 @@ export const ApiService = {
           current.unshift(data);
           ClientStore.saveBookings(current);
         }
-        return data;
+        created = data;
       }
     } catch {
       // Backend not running
     }
 
-    // Fallback: create in ClientStore
-    return ClientStore.createBooking(bookingData);
+    if (!created) {
+      created = ClientStore.createBooking(bookingData);
+    }
+
+    // Persist to Cloud Firestore
+    try {
+      await FirestoreService.saveBooking(created);
+    } catch (err) {
+      console.warn('Firestore booking save notification:', err);
+    }
+
+    return created;
   },
 
   // Get bookings by user or all bookings
@@ -109,11 +121,23 @@ export const ApiService = {
       const url = isAdmin ? '/api/admin/bookings' : '/api/bookings/my';
       const res = await fetch(url, { headers });
       const data = await tryParseJson(res);
-      if (Array.isArray(data)) {
+      if (Array.isArray(data) && data.length > 0) {
         return data;
       }
     } catch {
       // Backend not running
+    }
+
+    // Next try Firestore
+    try {
+      const firestoreBookings = isAdmin 
+        ? await FirestoreService.getAllBookings()
+        : await FirestoreService.getBookingsByUser(userId, email);
+      if (Array.isArray(firestoreBookings) && firestoreBookings.length > 0) {
+        return firestoreBookings;
+      }
+    } catch {
+      // Firestore not connected or offline
     }
 
     return ClientStore.getBookingsByUser(userId, email);
@@ -154,7 +178,15 @@ export const ApiService = {
     } catch {
       // Backend not running
     }
-    return ClientStore.updateBookingStatus(id, status, extras);
+    const updated = ClientStore.updateBookingStatus(id, status, extras);
+    if (updated?.bookingReference) {
+      try {
+        FirestoreService.updateBookingStatus(updated.bookingReference, status);
+      } catch (e) {
+        console.warn('Firestore update status notice:', e);
+      }
+    }
+    return updated;
   },
 
   // Submit Review

@@ -136,7 +136,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       if (onSuccess) onSuccess();
       onClose();
     } catch (err: any) {
-      setError(err.message || 'Google sign in was cancelled or failed.');
+      console.warn('Google sign-in error:', err);
+      const code = err?.code || '';
+      if (code === 'auth/unauthorized-domain') {
+        setError('This domain is not yet in your Firebase Authorized Domains list. Please add your Vercel URL in Firebase Console (Authentication > Settings > Authorized domains) or sign in below with Email/Password!');
+      } else if (code === 'auth/popup-blocked') {
+        setError('The Google sign-in popup was blocked by your browser. Please allow popups or use Email & Password.');
+      } else if (code === 'auth/popup-closed-by-user') {
+        setError('Sign-in cancelled. Please try again or use Email & Password.');
+      } else if (code === 'auth/cancelled-popup-request') {
+        setError('Popup request was cancelled. Please try again.');
+      } else {
+        setError(err.message || 'Google sign-in failed. You can also sign in or register with Email & Password below.');
+      }
     } finally {
       setLoading(false);
     }

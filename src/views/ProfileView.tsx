@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { AuthModal } from '../components/AuthModal.tsx';
+import { FirestoreService } from '../services/firestoreService.ts';
 import {
   User,
   Mail,
@@ -64,25 +65,35 @@ export const ProfileView: React.FC = () => {
     setErrorMessage('');
 
     try {
-      const res = await apiFetch('/api/user/profile', {
-        method: 'PUT',
-        body: JSON.stringify({
-          name: name.trim(),
-          phone: phone.trim() ? `+91 ${phone.replace(/\D/g, '')}` : '',
-          address: address.trim(),
-          country: country.trim(),
-        }),
-      });
+      const profileData = {
+        name: name.trim(),
+        phone: phone.trim() ? `+91 ${phone.replace(/\D/g, '')}` : '',
+        address: address.trim(),
+        country: country.trim(),
+      };
 
-      if (res.ok) {
-        const updated = await res.json();
-        updateLocalProfile(updated);
-        setSuccessMessage('Profile and stay preferences successfully saved.');
-        setTimeout(() => setSuccessMessage(''), 4000);
-      } else {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to update personal details.');
+      // 1. Save directly to Cloud Firestore
+      await FirestoreService.saveUserProfile(user.uid, profileData);
+
+      // 2. Also sync to backend API if available
+      try {
+        const res = await apiFetch('/api/user/profile', {
+          method: 'PUT',
+          body: JSON.stringify(profileData),
+        });
+
+        if (res.ok) {
+          const updated = await res.json();
+          updateLocalProfile(updated);
+        } else {
+          updateLocalProfile(profileData);
+        }
+      } catch {
+        updateLocalProfile(profileData);
       }
+
+      setSuccessMessage('Profile and stay preferences successfully saved.');
+      setTimeout(() => setSuccessMessage(''), 4000);
     } catch (err: any) {
       console.error('Failed to save profile:', err);
       setErrorMessage(err.message || 'Error updating profile.');
