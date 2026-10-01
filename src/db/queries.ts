@@ -735,10 +735,15 @@ let memorySettings: any = {
   announcementBanner: '👑 Welcome to The Grand Imperial Palace — Experience Luxury Indian Hospitality in the Heart of Mumbai.',
 };
 
-export let isPostgresOnline = true;
+export let isPostgresOnline = !process.env.VERCEL || Boolean(
+  process.env.SQL_HOST &&
+  process.env.SQL_HOST !== 'localhost' &&
+  !process.env.SQL_HOST.includes('127.0.0.1')
+);
 
 // Check and seed default data (ensures at least 30 clean rooms in Cloud SQL)
 export async function seedDatabaseIfEmpty() {
+  if (!isPostgresOnline) return;
   try {
     // Quick probe to check if SQL database connection is alive
     const existingRooms = await db.select({ count: sql<number>`count(*)` }).from(rooms);
