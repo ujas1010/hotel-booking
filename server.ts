@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import { requireAuth, optionalAuth, requireAdmin, requireStaffOrAdmin, ADMIN_MASTER_CREDENTIALS, activeAdminTokens, activeUserSessions, AuthRequest, createLocalSessionToken } from './src/middleware/auth.ts';
 import {
   seedDatabaseIfEmpty,
@@ -1303,6 +1302,7 @@ export async function startServer() {
   // VITE & STATIC FILES SERVING (Standalone Server Mode)
   // ----------------------------------------------------
   if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
