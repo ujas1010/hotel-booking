@@ -14,19 +14,39 @@ import crypto from "crypto";
 
 // src/lib/supabase.ts
 import { createClient } from "@supabase/supabase-js";
-var staticUrl = typeof import.meta !== "undefined" ? String(import.meta?.env?.VITE_SUPABASE_URL || "").trim() : "";
-var staticAnon = typeof import.meta !== "undefined" ? String(import.meta?.env?.VITE_SUPABASE_ANON_KEY || "").trim() : "";
-var dynamicUrl = staticUrl;
-var dynamicAnon = staticAnon;
-var SUPABASE_URL = staticUrl;
-var SUPABASE_ANON_KEY = staticAnon;
-var SUPABASE_SERVICE_ROLE_KEY = (typeof process !== "undefined" && process.env ? process.env.SUPABASE_SERVICE_ROLE_KEY : "") || "";
+var getEnvVar = (key) => {
+  try {
+    if (typeof process !== "undefined" && process.env && process.env[key]) {
+      return String(process.env[key]).trim();
+    }
+  } catch {
+  }
+  try {
+    if (typeof import.meta !== "undefined" && import.meta?.env && import.meta.env[key]) {
+      return String(import.meta.env[key]).trim();
+    }
+  } catch {
+  }
+  return "";
+};
+var initialUrl = getEnvVar("VITE_SUPABASE_URL") || getEnvVar("SUPABASE_URL");
+var initialAnon = getEnvVar("VITE_SUPABASE_ANON_KEY") || getEnvVar("SUPABASE_ANON_KEY");
+var initialServiceKey = getEnvVar("SUPABASE_SERVICE_ROLE_KEY");
+var dynamicUrl = initialUrl;
+var dynamicAnon = initialAnon;
+var SUPABASE_URL = initialUrl;
+var SUPABASE_ANON_KEY = initialAnon;
+var SUPABASE_SERVICE_ROLE_KEY = initialServiceKey;
 var isSupabaseConfigured = () => {
-  const url = dynamicUrl || SUPABASE_URL;
-  const key = dynamicAnon || SUPABASE_ANON_KEY;
+  const url = dynamicUrl || SUPABASE_URL || getEnvVar("VITE_SUPABASE_URL") || getEnvVar("SUPABASE_URL");
+  const key = dynamicAnon || SUPABASE_ANON_KEY || getEnvVar("VITE_SUPABASE_ANON_KEY") || getEnvVar("SUPABASE_ANON_KEY");
   return Boolean(url) && Boolean(key) && url.startsWith("https://") && !url.includes("placeholder") && !url.includes("your-project");
 };
-var supabase = isSupabaseConfigured() ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+var getSupabaseConfig = () => ({
+  url: dynamicUrl || SUPABASE_URL || getEnvVar("VITE_SUPABASE_URL") || getEnvVar("SUPABASE_URL"),
+  anonKey: dynamicAnon || SUPABASE_ANON_KEY || getEnvVar("VITE_SUPABASE_ANON_KEY") || getEnvVar("SUPABASE_ANON_KEY")
+});
+var supabase = isSupabaseConfigured() ? createClient(getSupabaseConfig().url, getSupabaseConfig().anonKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
@@ -36,8 +56,8 @@ var supabase = isSupabaseConfigured() ? createClient(SUPABASE_URL, SUPABASE_ANON
   auth: { persistSession: false }
 });
 var supabaseAdmin = isSupabaseConfigured() ? createClient(
-  SUPABASE_URL,
-  SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY,
+  getSupabaseConfig().url,
+  SUPABASE_SERVICE_ROLE_KEY || getSupabaseConfig().anonKey,
   {
     auth: {
       autoRefreshToken: false,
@@ -1296,7 +1316,14 @@ async function authenticateDbUser(email, password) {
     return {
       success: false,
       reason: "USER_NOT_FOUND",
-      message: "No account found with this email address. Please create a new account by signing up."
+      message: 'No account found with this email address. Please create a new account by signing up or use "Continue with Google".'
+    };
+  }
+  if (!foundUser.password) {
+    return {
+      success: false,
+      reason: "OAUTH_ACCOUNT",
+      message: 'This account was registered via Google Sign-In. Please click "Continue with Google" to log in, or use "Forgot Password?" below to set an email password.'
     };
   }
   if (foundUser.password && foundUser.password !== trimmedPassword) {
@@ -1342,7 +1369,20 @@ async function updateUserPassword(email, newPassword) {
     mem.updatedAt = /* @__PURE__ */ new Date();
     return true;
   }
-  return false;
+  const newUser = {
+    id: memoryUsers.length + 10,
+    uid: `user_${Date.now()}`,
+    email: normEmail,
+    password: trimmed,
+    name: normEmail.split("@")[0],
+    role: normEmail.includes("admin") ? "admin" : "guest",
+    phone: null,
+    loyaltyPoints: 100,
+    createdAt: /* @__PURE__ */ new Date(),
+    updatedAt: /* @__PURE__ */ new Date()
+  };
+  memoryUsers.push(newUser);
+  return true;
 }
 async function getOrCreateUser(userData) {
   const defaultRole = userData.email.toLowerCase().includes("admin") ? "admin" : userData.role || "guest";
@@ -3353,6 +3393,24 @@ function createApp() {
     }
     res.json({ success: true, message: "Logged out successfully." });
   });
+  app2.post("/api/auth/sync-oauth", async (req, res) => {
+    try {
+      const { uid, email, name, avatar, role, phone } = req.body;
+      if (!email) return res.status(400).json({ error: "Email is required" });
+      const cleanEmail = String(email).trim().toLowerCase();
+      const user = await getOrCreateUser({
+        uid: uid || `oauth_${Date.now()}`,
+        email: cleanEmail,
+        name: name || cleanEmail.split("@")[0],
+        avatar: avatar || "",
+        role: role || (cleanEmail.includes("admin") ? "admin" : "guest")
+      });
+      res.json({ success: true, user });
+    } catch (err) {
+      console.warn("OAuth sync warning:", err.message);
+      res.json({ success: true });
+    }
+  });
   app2.post("/api/auth/forgot-password/send-otp", async (req, res) => {
     try {
       const { email } = req.body;
@@ -3367,29 +3425,13 @@ function createApp() {
           error: `Too many password reset requests. Please wait ${rateLimitCheck.retryAfterSeconds} seconds before requesting a new code.`
         });
       }
-      const isMasterAdmin = cleanEmail === "admin@grandimperialpalace.in" || cleanEmail === "davekaran2006@gmail.com";
-      let userExists = isMasterAdmin;
-      if (!userExists) {
-        const dbUser = await getUserByEmail(cleanEmail);
-        if (dbUser) userExists = true;
-      }
-      if (!userExists && isSupabaseConfigured()) {
-        try {
-          const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
-          const supaUser = usersData?.users?.find(
-            (u) => (u.email || "").toLowerCase() === cleanEmail
-          );
-          if (supaUser) userExists = true;
-        } catch (supaErr) {
-          console.warn("Supabase check user notice:", supaErr);
-        }
-      }
-      if (!userExists) {
-        return res.status(404).json({
-          success: false,
-          error: "No account found with this email address. Please create a new account by signing up.",
-          code: "USER_NOT_FOUND",
-          suggestMode: "signup"
+      const existingUser = await getUserByEmail(cleanEmail);
+      if (!existingUser) {
+        await getOrCreateUser({
+          uid: `user_${Date.now()}`,
+          email: cleanEmail,
+          name: cleanEmail.split("@")[0],
+          role: cleanEmail.includes("admin") ? "admin" : "guest"
         });
       }
       const otpRes = issueEmailOtp(cleanEmail);
@@ -3401,7 +3443,8 @@ function createApp() {
         success: true,
         message: `A 6-digit verification code has been dispatched to ${otpRes.maskedEmail}. Please check your inbox.`,
         expiresAt: otpRes.expiresAt,
-        maskedEmail: otpRes.maskedEmail
+        maskedEmail: otpRes.maskedEmail,
+        demoOtp: process.env.NODE_ENV !== "production" ? otpRes.code : void 0
       });
     } catch (error) {
       console.error("Send forgot password OTP error:", error);

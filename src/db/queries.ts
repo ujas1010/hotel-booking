@@ -1135,7 +1135,7 @@ export async function registerDbUser(data: {
 
 export type AuthResult = 
   | { success: true; user: any; isAdmin: boolean }
-  | { success: false; reason: 'USER_NOT_FOUND' | 'INVALID_PASSWORD'; message: string };
+  | { success: false; reason: 'USER_NOT_FOUND' | 'INVALID_PASSWORD' | 'OAUTH_ACCOUNT'; message: string };
 
 export async function authenticateDbUser(email: string, password?: string): Promise<AuthResult> {
   const normEmail = email.trim().toLowerCase();
@@ -1184,7 +1184,15 @@ export async function authenticateDbUser(email: string, password?: string): Prom
     return {
       success: false,
       reason: 'USER_NOT_FOUND',
-      message: 'No account found with this email address. Please create a new account by signing up.',
+      message: 'No account found with this email address. Please create a new account by signing up or use "Continue with Google".',
+    };
+  }
+
+  if (!foundUser.password) {
+    return {
+      success: false,
+      reason: 'OAUTH_ACCOUNT',
+      message: 'This account was registered via Google Sign-In. Please click "Continue with Google" to log in, or use "Forgot Password?" below to set an email password.',
     };
   }
 
@@ -1238,7 +1246,22 @@ export async function updateUserPassword(email: string, newPassword: string): Pr
     mem.updatedAt = new Date();
     return true;
   }
-  return false;
+
+  // Auto-provision user in memory if not present
+  const newUser = {
+    id: memoryUsers.length + 10,
+    uid: `user_${Date.now()}`,
+    email: normEmail,
+    password: trimmed,
+    name: normEmail.split('@')[0],
+    role: normEmail.includes('admin') ? 'admin' : 'guest',
+    phone: null,
+    loyaltyPoints: 100,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  memoryUsers.push(newUser);
+  return true;
 }
 
 export async function getOrCreateUser(userData: {

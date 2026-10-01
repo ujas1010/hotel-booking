@@ -1,19 +1,36 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Static access for Vite compilation
-const staticUrl = typeof import.meta !== 'undefined' ? String((import.meta as any)?.env?.VITE_SUPABASE_URL || '').trim() : '';
-const staticAnon = typeof import.meta !== 'undefined' ? String((import.meta as any)?.env?.VITE_SUPABASE_ANON_KEY || '').trim() : '';
+// Safe environment variable getter for both Node.js and Vite Browser environments
+const getEnvVar = (key: string): string => {
+  try {
+    if (typeof process !== 'undefined' && process.env && process.env[key]) {
+      return String(process.env[key]).trim();
+    }
+  } catch {}
 
-let dynamicUrl = staticUrl;
-let dynamicAnon = staticAnon;
+  try {
+    if (typeof import.meta !== 'undefined' && (import.meta as any)?.env && (import.meta as any).env[key]) {
+      return String((import.meta as any).env[key]).trim();
+    }
+  } catch {}
 
-export let SUPABASE_URL = staticUrl;
-export let SUPABASE_ANON_KEY = staticAnon;
-export const SUPABASE_SERVICE_ROLE_KEY = (typeof process !== 'undefined' && process.env ? process.env.SUPABASE_SERVICE_ROLE_KEY : '') || '';
+  return '';
+};
+
+const initialUrl = getEnvVar('VITE_SUPABASE_URL') || getEnvVar('SUPABASE_URL');
+const initialAnon = getEnvVar('VITE_SUPABASE_ANON_KEY') || getEnvVar('SUPABASE_ANON_KEY');
+const initialServiceKey = getEnvVar('SUPABASE_SERVICE_ROLE_KEY');
+
+let dynamicUrl = initialUrl;
+let dynamicAnon = initialAnon;
+
+export let SUPABASE_URL = initialUrl;
+export let SUPABASE_ANON_KEY = initialAnon;
+export const SUPABASE_SERVICE_ROLE_KEY = initialServiceKey;
 
 export const isSupabaseConfigured = (): boolean => {
-  const url = dynamicUrl || SUPABASE_URL;
-  const key = dynamicAnon || SUPABASE_ANON_KEY;
+  const url = dynamicUrl || SUPABASE_URL || getEnvVar('VITE_SUPABASE_URL') || getEnvVar('SUPABASE_URL');
+  const key = dynamicAnon || SUPABASE_ANON_KEY || getEnvVar('VITE_SUPABASE_ANON_KEY') || getEnvVar('SUPABASE_ANON_KEY');
   return (
     Boolean(url) &&
     Boolean(key) &&
@@ -23,9 +40,14 @@ export const isSupabaseConfigured = (): boolean => {
   );
 };
 
+export const getSupabaseConfig = () => ({
+  url: dynamicUrl || SUPABASE_URL || getEnvVar('VITE_SUPABASE_URL') || getEnvVar('SUPABASE_URL'),
+  anonKey: dynamicAnon || SUPABASE_ANON_KEY || getEnvVar('VITE_SUPABASE_ANON_KEY') || getEnvVar('SUPABASE_ANON_KEY'),
+});
+
 // Client-side Supabase client with auth persistence
 export let supabase: SupabaseClient = isSupabaseConfigured()
-  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  ? createClient(getSupabaseConfig().url, getSupabaseConfig().anonKey, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
@@ -52,11 +74,11 @@ export function configureSupabase(url: string, anonKey: string): SupabaseClient 
   return supabase;
 }
 
-// Admin Supabase client (used server-side if service role key exists)
+// Admin Supabase client (used server-side if service role key exists, otherwise anon key)
 export const supabaseAdmin: SupabaseClient = isSupabaseConfigured()
   ? createClient(
-      SUPABASE_URL,
-      SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY,
+      getSupabaseConfig().url,
+      SUPABASE_SERVICE_ROLE_KEY || getSupabaseConfig().anonKey,
       {
         auth: {
           autoRefreshToken: false,

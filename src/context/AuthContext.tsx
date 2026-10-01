@@ -207,8 +207,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(appUser);
     setProfile(loadedProfile);
 
+    // Synchronize Google / Supabase user to backend database
+    try {
+      fetch('/api/auth/sync-oauth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          uid: supaUser.id,
+          email: cleanEmail,
+          name: loadedProfile.name,
+          avatar: loadedProfile.avatar,
+          role: loadedProfile.role,
+          phone: loadedProfile.phone,
+        }),
+      }).catch(() => null);
+    } catch {}
+
     return { appUser, loadedProfile };
   };
+
+  const [supabaseConfiguredState, setSupabaseConfiguredState] = useState(() => isSupabaseConfigured());
 
   // Restore stored session on mount
   useEffect(() => {
@@ -220,6 +238,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const cfg = await configRes.json();
           if (cfg.supabaseUrl && cfg.supabaseAnonKey) {
             configureSupabase(cfg.supabaseUrl, cfg.supabaseAnonKey);
+            setSupabaseConfiguredState(true);
           }
         }
       } catch {}
@@ -353,7 +372,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!isSupabaseConfigured()) return;
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (session?.user && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED')) {
+      if (session?.user && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION')) {
         const cleanEmail = session.user.email?.toLowerCase() || '';
         const isAdm = checkIfAdmin(cleanEmail);
 
@@ -385,9 +404,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
 
     return () => {
-      subscription.unsubscribe();
+      subscription?.unsubscribe();
     };
-  }, []);
+  }, [supabaseConfiguredState]);
 
   // Sign Up with Email & Password (Pure Supabase Auth + Database sync)
   const signUpWithEmail = async (data: { name: string; email: string; password: string; phone?: string }) => {
