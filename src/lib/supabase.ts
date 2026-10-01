@@ -1,22 +1,24 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const getEnv = (key: string, fallback: string = ''): string => {
-  try {
-    if (typeof import.meta !== 'undefined' && (import.meta as any).env && (import.meta as any).env[key]) {
-      return (import.meta as any).env[key];
-    }
-  } catch {}
+// Safe environment reader that works across Vite browser builds, ES modules, and Node CJS bundles
+const getEnvVal = (key: string): string => {
   try {
     if (typeof process !== 'undefined' && process.env && process.env[key]) {
-      return process.env[key] || fallback;
+      return String(process.env[key]).trim();
     }
   } catch {}
-  return fallback;
+  try {
+    const metaEnv = (import.meta as any)?.env;
+    if (metaEnv && metaEnv[key]) {
+      return String(metaEnv[key]).trim();
+    }
+  } catch {}
+  return '';
 };
 
-export const SUPABASE_URL = getEnv('VITE_SUPABASE_URL', '').trim();
-export const SUPABASE_ANON_KEY = getEnv('VITE_SUPABASE_ANON_KEY', '').trim();
-export const SUPABASE_SERVICE_ROLE_KEY = getEnv('SUPABASE_SERVICE_ROLE_KEY', '').trim();
+export const SUPABASE_URL = getEnvVal('VITE_SUPABASE_URL') || getEnvVal('SUPABASE_URL');
+export const SUPABASE_ANON_KEY = getEnvVal('VITE_SUPABASE_ANON_KEY') || getEnvVal('SUPABASE_ANON_KEY');
+export const SUPABASE_SERVICE_ROLE_KEY = getEnvVal('SUPABASE_SERVICE_ROLE_KEY');
 
 export const isSupabaseConfigured = (): boolean => {
   return (
@@ -28,7 +30,7 @@ export const isSupabaseConfigured = (): boolean => {
   );
 };
 
-// Client-side Supabase client with auth persistence (dummy fallback if unconfigured)
+// Client-side Supabase client with auth persistence
 export const supabase: SupabaseClient = isSupabaseConfigured()
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       auth: {
