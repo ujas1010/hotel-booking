@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Booking } from '../types.ts';
 import { useAuth } from '../context/AuthContext.tsx';
+import { AuthModal } from '../components/AuthModal.tsx';
 import { ApiService } from '../services/api.ts';
 import { ClientStore } from '../services/clientStore.ts';
 import {
@@ -18,6 +19,7 @@ import {
   ShieldCheck,
   Printer,
   Receipt,
+  UserPlus,
 } from 'lucide-react';
 import { InvoiceModal } from '../components/InvoiceModal.tsx';
 
@@ -30,7 +32,9 @@ export const MyBookingsView: React.FC<MyBookingsViewProps> = ({
   onExploreRooms,
   onViewBookingDetails,
 }) => {
-  const { user, token, apiFetch, loginWithGoogle } = useAuth();
+  const { user, token, apiFetch } = useAuth();
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'signup'>('login');
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterTab, setFilterTab] = useState<'all' | 'confirmed' | 'checked_in' | 'past' | 'cancelled'>('all');
@@ -107,24 +111,51 @@ export const MyBookingsView: React.FC<MyBookingsViewProps> = ({
 
   if (!user) {
     return (
-      <div className="max-w-lg mx-auto bg-white border border-[#E8E1D5] rounded-3xl p-8 text-center space-y-6 shadow-sm my-12">
-        <div className="w-16 h-16 rounded-full bg-[#FAF3E8] border border-[#DFCEAF] flex items-center justify-center mx-auto text-[#785116]">
-          <LogIn className="w-8 h-8" />
+      <>
+        <div className="max-w-lg mx-auto bg-white border border-[#ECE5D8] rounded-3xl p-8 text-center space-y-6 shadow-sm my-12">
+          <div className="w-16 h-16 rounded-full bg-[#FAF8F5] border border-[#ECE5D8] flex items-center justify-center mx-auto text-[#947139]">
+            <LogIn className="w-8 h-8" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-2xl font-bold font-serif text-[#1C1916]">Sign In to View Your Reservations</h2>
+            <p className="text-xs text-[#665E55] leading-relaxed">
+              Sign in to retrieve your stay history, access verified invoice vouchers, and manage your palace reservations.
+            </p>
+          </div>
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={() => {
+                setAuthModalMode('login');
+                setAuthModalOpen(true);
+              }}
+              className="px-5 py-2.5 bg-white border border-[#ECE5D8] hover:bg-[#FAF8F5] text-[#1C1916] font-semibold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider"
+            >
+              <LogIn className="w-4 h-4 text-[#947139]" />
+              Sign In
+            </button>
+            <button
+              onClick={() => {
+                setAuthModalMode('signup');
+                setAuthModalOpen(true);
+              }}
+              className="px-5 py-2.5 bg-[#1C1916] hover:bg-[#2C2723] text-[#FAF8F5] font-semibold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider border border-[#947139]/40"
+            >
+              <UserPlus className="w-4 h-4 text-[#E6CA85]" />
+              Register Account
+            </button>
+          </div>
         </div>
-        <div className="space-y-2">
-          <h2 className="text-2xl font-bold font-serif text-[#1C1917]">Sign In to View Your Reservations</h2>
-          <p className="text-xs text-[#7A7265] leading-relaxed">
-            Sign in to retrieve your stay history, access verified invoice vouchers, and manage your palace reservations.
-          </p>
-        </div>
-        <button
-          onClick={loginWithGoogle}
-          className="px-6 py-3 bg-[#966A28] hover:bg-[#7A5116] text-[#FDF6EE] font-semibold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 mx-auto cursor-pointer uppercase tracking-wider border border-[#DFCEAF]"
-        >
-          <LogIn className="w-4 h-4 stroke-[2.5]" />
-          Sign In with Google
-        </button>
-      </div>
+
+        <AuthModal
+          isOpen={authModalOpen}
+          onClose={() => setAuthModalOpen(false)}
+          initialMode={authModalMode}
+          onSuccess={() => {
+            setAuthModalOpen(false);
+            fetchUserBookings();
+          }}
+        />
+      </>
     );
   }
 

@@ -273,7 +273,7 @@ export const OtpVerificationModal: React.FC<OtpVerificationModalProps> = ({
               <label className="block text-center text-xs font-semibold text-[#665E55] mb-2 uppercase tracking-wider">
                 Enter 6-Digit Code
               </label>
-              <div className="flex items-center justify-center gap-2 sm:gap-2.5">
+              <div className="flex items-center justify-center gap-1.5 sm:gap-2.5">
                 {digits.map((digit, idx) => (
                   <input
                     key={idx}
@@ -286,7 +286,7 @@ export const OtpVerificationModal: React.FC<OtpVerificationModalProps> = ({
                     onChange={(e) => handleDigitChange(idx, e.target.value)}
                     onKeyDown={(e) => handleKeyDown(idx, e)}
                     disabled={isSuccess || isVerifying}
-                    className={`w-11 h-12 sm:w-12 sm:h-14 text-center text-lg sm:text-xl font-bold font-mono rounded-xl border transition-all text-[#1C1916] ${
+                    className={`w-9 h-11 sm:w-12 sm:h-14 text-center text-base sm:text-xl font-bold font-mono rounded-xl border transition-all text-[#1C1916] ${
                       digit
                         ? 'border-[#947139] bg-[#FAF8F5] ring-2 ring-[#947139]/20'
                         : 'border-[#ECE5D8] bg-white focus:border-[#947139] focus:ring-2 focus:ring-[#947139]/20'

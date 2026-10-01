@@ -1,6 +1,6 @@
 {
   "name": "Hotel Room Booking System",
-  "description": "Full-stack luxury hotel reservation and management platform with Firebase Authentication & Cloud Firestore persistence, front desk reception panel for walk-in check-ins & folios, OTP phone verification, room inventory, guest profiles, and an administrative control console.",
+  "description": "Full-stack luxury hotel reservation and management platform with Supabase Authentication & PostgreSQL/Cloud SQL persistence, front desk reception panel for walk-in check-ins & folios, OTP phone verification, room inventory, guest profiles, and an administrative control console.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

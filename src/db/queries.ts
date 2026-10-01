@@ -683,7 +683,44 @@ let memoryRooms: any[] = SEED_ROOMS.map((r, index) => ({
 }));
 
 let memoryBookings: any[] = [];
-let memoryUsers: any[] = [];
+let memoryUsers: any[] = [
+  {
+    id: 1,
+    uid: 'admin_master_uid',
+    email: 'admin@grandimperialpalace.in',
+    password: 'ImperialAdmin',
+    name: 'Palace General Manager & Admin',
+    role: 'admin',
+    phone: '+91 22 6665 3300',
+    loyaltyPoints: 5000,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  },
+  {
+    id: 2,
+    uid: 'patron_demo_uid',
+    email: 'guest@grandimperialpalace.in',
+    password: 'guest123',
+    name: 'Maharaja Royal Guest',
+    role: 'guest',
+    phone: '+91 98200 12345',
+    loyaltyPoints: 450,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  },
+  {
+    id: 3,
+    uid: 'admin_karan_uid',
+    email: 'davekaran2006@gmail.com',
+    password: 'password123',
+    name: 'Karan Dave',
+    role: 'admin',
+    phone: '+91 98765 43210',
+    loyaltyPoints: 5000,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  },
+];
 let memoryReviews: any[] = [];
 let memorySettings: any = {
   id: 1,
@@ -698,9 +735,16 @@ let memorySettings: any = {
   announcementBanner: '👑 Welcome to The Grand Imperial Palace — Experience Luxury Indian Hospitality in the Heart of Mumbai.',
 };
 
+export let isPostgresOnline = true;
+
 // Check and seed default data (ensures at least 30 clean rooms in Cloud SQL)
 export async function seedDatabaseIfEmpty() {
   try {
+    // Quick probe to check if SQL database connection is alive
+    const existingRooms = await db.select({ count: sql<number>`count(*)` }).from(rooms);
+    const roomCount = Number(existingRooms[0]?.count || 0);
+    isPostgresOnline = true;
+
     // Ensure password column exists on users table in Cloud SQL
     try {
       await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS password text;`);
@@ -732,9 +776,6 @@ export async function seedDatabaseIfEmpty() {
     } catch (adminErr) {
       console.warn('Notice: Admin user seeding:', adminErr);
     }
-
-    const existingRooms = await db.select({ count: sql<number>`count(*)` }).from(rooms);
-    const roomCount = Number(existingRooms[0]?.count || 0);
 
     // Synchronize category images across any existing rooms
     for (const [cat, img] of Object.entries(CATEGORY_ROOM_IMAGES)) {
@@ -795,7 +836,7 @@ export async function seedDatabaseIfEmpty() {
       }).onConflictDoNothing();
     }
   } catch (error) {
-    console.warn('Database seeding notice (using in-memory resilience if DB is starting):', error);
+    isPostgresOnline = false;
   }
 }
 
@@ -810,8 +851,9 @@ export async function getAllRooms(filters?: {
   checkOut?: string;
   status?: string;
 }) {
-  try {
-    const conditions = [];
+  if (isPostgresOnline) {
+    try {
+      const conditions = [];
 
     if (filters?.status) {
       conditions.push(eq(rooms.status, filters.status));
@@ -886,8 +928,9 @@ export async function getAllRooms(filters?: {
       });
     }
   } catch (error) {
-    console.warn('Database query fallback to memory storage for getAllRooms:', error);
+    isPostgresOnline = false;
   }
+}
 
   // Resilient memory store filter
   const activeMemoryBookedIds = new Set(
@@ -1033,32 +1076,34 @@ export async function registerDbUser(data: {
   const role = isAdmin ? 'admin' : 'guest';
   const uid = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-  try {
-    // Check if user already exists
-    const existing = await db.select().from(users).where(eq(sql`lower(${users.email})`, normEmail));
-    if (existing.length > 0) {
-      throw new Error('An account with this email address already exists. Please sign in.');
-    }
+  if (isPostgresOnline) {
+    try {
+      // Check if user already exists
+      const existing = await db.select().from(users).where(eq(sql`lower(${users.email})`, normEmail));
+      if (existing.length > 0) {
+        throw new Error('An account with this email address already exists. Please sign in.');
+      }
 
-    const result = await db.insert(users).values({
-      uid,
-      email: normEmail,
-      password: data.password || '',
-      name: data.name.trim(),
-      phone: data.phone?.trim() || null,
-      role,
-      loyaltyPoints: isAdmin ? 5000 : 100,
-    }).returning();
+      const result = await db.insert(users).values({
+        uid,
+        email: normEmail,
+        password: data.password || '',
+        name: data.name.trim(),
+        phone: data.phone?.trim() || null,
+        role,
+        loyaltyPoints: isAdmin ? 5000 : 100,
+      }).returning();
 
-    if (result.length) {
-      memoryUsers.push(result[0]);
-      return result[0];
+      if (result.length) {
+        memoryUsers.push(result[0]);
+        return result[0];
+      }
+    } catch (error: any) {
+      if (error.message?.includes('already exists')) {
+        throw error;
+      }
+      isPostgresOnline = false;
     }
-  } catch (error: any) {
-    if (error.message?.includes('already exists')) {
-      throw error;
-    }
-    console.warn('Database fallback for registerDbUser:', error);
   }
 
   // Memory fallback
@@ -1083,7 +1128,11 @@ export async function registerDbUser(data: {
   return userObj;
 }
 
-export async function authenticateDbUser(email: string, password?: string) {
+export type AuthResult = 
+  | { success: true; user: any; isAdmin: boolean }
+  | { success: false; reason: 'USER_NOT_FOUND' | 'INVALID_PASSWORD'; message: string };
+
+export async function authenticateDbUser(email: string, password?: string): Promise<AuthResult> {
   const normEmail = email.trim().toLowerCase();
   const trimmedPassword = (password || '').trim();
 
@@ -1106,45 +1155,85 @@ export async function authenticateDbUser(email: string, password?: string) {
         updatedAt: new Date(),
       };
     }
-    return { user: admin, isAdmin: true };
+    return { success: true, user: admin, isAdmin: true };
   }
 
-  try {
-    const res = await db.select().from(users).where(eq(sql`lower(${users.email})`, normEmail));
-    if (res.length > 0) {
-      const u = res[0];
-      // If password was set, verify password matches
-      if (u.password && u.password !== trimmedPassword) {
-        return null;
+  let foundUser: any = null;
+
+  if (isPostgresOnline) {
+    try {
+      const res = await db.select().from(users).where(eq(sql`lower(${users.email})`, normEmail));
+      if (res.length > 0) {
+        foundUser = res[0];
       }
-      const isAdm = u.role === 'admin' || normEmail === 'admin@grandimperialpalace.in';
-      return { user: u, isAdmin: isAdm };
+    } catch (error) {
+      isPostgresOnline = false;
     }
-  } catch (error) {
-    console.warn('Database fallback for authenticateDbUser:', error);
   }
 
-  const mem = memoryUsers.find(u => u.email.toLowerCase() === normEmail);
-  if (mem) {
-    if (mem.password && mem.password !== trimmedPassword) {
-      return null;
-    }
-    const isAdm = mem.role === 'admin' || normEmail === 'admin@grandimperialpalace.in';
-    return { user: mem, isAdmin: isAdm };
+  if (!foundUser) {
+    foundUser = memoryUsers.find(u => u.email.toLowerCase() === normEmail) || null;
   }
 
-  return null;
+  if (!foundUser) {
+    return {
+      success: false,
+      reason: 'USER_NOT_FOUND',
+      message: 'No account found with this email address. Please create a new account by signing up.',
+    };
+  }
+
+  if (foundUser.password && foundUser.password !== trimmedPassword) {
+    return {
+      success: false,
+      reason: 'INVALID_PASSWORD',
+      message: 'Incorrect password for this account. Please verify your password or use "Forgot Password?" to reset it.',
+    };
+  }
+
+  const isAdm = foundUser.role === 'admin' || normEmail === 'admin@grandimperialpalace.in' || normEmail === 'davekaran2006@gmail.com';
+  return { success: true, user: foundUser, isAdmin: isAdm };
 }
 
 export async function getUserByEmail(email: string) {
   const normEmail = email.trim().toLowerCase();
-  try {
-    const res = await db.select().from(users).where(eq(sql`lower(${users.email})`, normEmail));
-    if (res.length > 0) return res[0];
-  } catch (error) {
-    console.warn('Database fallback for getUserByEmail:', error);
+  if (isPostgresOnline) {
+    try {
+      const res = await db.select().from(users).where(eq(sql`lower(${users.email})`, normEmail));
+      if (res.length > 0) return res[0];
+    } catch (error) {
+      isPostgresOnline = false;
+    }
   }
   return memoryUsers.find(u => u.email?.toLowerCase() === normEmail) || null;
+}
+
+export async function updateUserPassword(email: string, newPassword: string): Promise<boolean> {
+  const normEmail = email.trim().toLowerCase();
+  const trimmed = newPassword.trim();
+  if (isPostgresOnline) {
+    try {
+      const res = await db.update(users)
+        .set({ password: trimmed, updatedAt: new Date() })
+        .where(eq(sql`lower(${users.email})`, normEmail))
+        .returning();
+      if (res.length > 0) {
+        const idx = memoryUsers.findIndex(u => u.email?.toLowerCase() === normEmail);
+        if (idx !== -1) memoryUsers[idx].password = trimmed;
+        return true;
+      }
+    } catch (error) {
+      isPostgresOnline = false;
+    }
+  }
+
+  const mem = memoryUsers.find(u => u.email?.toLowerCase() === normEmail);
+  if (mem) {
+    mem.password = trimmed;
+    mem.updatedAt = new Date();
+    return true;
+  }
+  return false;
 }
 
 export async function getOrCreateUser(userData: {
@@ -1668,13 +1757,15 @@ export async function createReview(data: {
 
 // ----------------- SETTINGS & ANALYTICS -----------------
 export async function getSettings() {
-  try {
-    const result = await db.select().from(settings).limit(1);
-    if (result.length) {
-      return result[0];
+  if (isPostgresOnline) {
+    try {
+      const result = await db.select().from(settings).limit(1);
+      if (result.length) {
+        return result[0];
+      }
+    } catch (error) {
+      isPostgresOnline = false;
     }
-  } catch (error) {
-    console.warn('Database fallback for getSettings:', error);
   }
   return memorySettings;
 }

@@ -275,18 +275,22 @@ function MainApp() {
         {currentView === 'profile' && <ProfileView />}
 
         {currentView === 'reception' && (
-          <ReceptionView
-            rooms={rooms}
-            onRefreshData={fetchRooms}
-            onNavigateToExplore={() => {
-              setCurrentView('explore');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            onNavigateHome={() => {
-              setCurrentView('home');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-          />
+          (isAdmin || profile?.role === 'admin' || profile?.role === 'receptionist') ? (
+            <ReceptionView
+              rooms={rooms}
+              onRefreshData={fetchRooms}
+              onNavigateToExplore={() => {
+                setCurrentView('explore');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              onNavigateHome={() => {
+                setCurrentView('home');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+            />
+          ) : (
+            <AdminPortalView onRefreshRooms={fetchRooms} />
+          )
         )}
 
         {currentView === 'admin' && (

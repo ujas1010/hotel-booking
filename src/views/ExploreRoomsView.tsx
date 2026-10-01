@@ -174,8 +174,8 @@ export const ExploreRoomsView: React.FC<ExploreRoomsViewProps> = ({
           </div>
 
           {/* Keyword Search & Price Toggle */}
-          <div className="flex items-center gap-3 w-full md:w-auto">
-            <div className="relative flex-1 md:w-64">
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 sm:gap-3 w-full md:w-auto">
+            <div className="relative flex-1 min-w-[180px] sm:w-64">
               <input
                 id="search-keyword-input"
                 type="text"
@@ -203,13 +203,14 @@ export const ExploreRoomsView: React.FC<ExploreRoomsViewProps> = ({
               className="flex items-center gap-1.5 text-xs text-[#665E55] hover:text-[#1C1917] bg-[#FAF8F5] hover:bg-[#F3ECE1] px-3.5 py-2 rounded-xl border border-[#ECE5D8] transition-colors font-medium cursor-pointer shrink-0"
             >
               <SlidersHorizontal className="w-3.5 h-3.5 text-[#947139]" />
-              <span>Tariff Filter</span>
+              <span className="hidden sm:inline">Tariff Filter</span>
+              <span className="sm:hidden">Tariff</span>
             </button>
 
             <button
               id="reset-filters-btn"
               onClick={resetFilters}
-              className="text-xs text-[#948A7D] hover:text-[#1C1916] p-2 rounded-lg transition-colors cursor-pointer"
+              className="text-xs text-[#948A7D] hover:text-[#1C1916] p-2 rounded-lg transition-colors cursor-pointer bg-[#FAF8F5] border border-[#ECE5D8]"
               title="Reset all filters"
             >
               <RotateCcw className="w-4 h-4" />

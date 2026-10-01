@@ -1,5 +1,4 @@
 import { ClientStore } from './clientStore.ts';
-import { FirestoreService } from './firestoreService.ts';
 import { Room, Booking, Review, HotelSettings } from '../types.ts';
 
 // Helper to check if response is valid JSON (not HTML fallback from static host)
@@ -42,7 +41,7 @@ export const ApiService = {
         return data;
       }
     } catch {
-      // Backend not running (e.g. on Vercel static deployment)
+      // Backend not running (e.g. on static deployment)
     }
 
     // Resilient fallback: return from ClientStore
@@ -101,13 +100,6 @@ export const ApiService = {
       created = ClientStore.createBooking(bookingData);
     }
 
-    // Persist to Cloud Firestore
-    try {
-      await FirestoreService.saveBooking(created);
-    } catch (err) {
-      console.warn('Firestore booking save notification:', err);
-    }
-
     return created;
   },
 
@@ -116,7 +108,7 @@ export const ApiService = {
     try {
       const headers: Record<string, string> = {};
       if (token) headers['Authorization'] = `Bearer ${token}`;
-      if (isAdmin) headers['x-admin-token'] = token || 'admin_secret';
+      if (isAdmin && token) headers['x-admin-token'] = token;
 
       const url = isAdmin ? '/api/admin/bookings' : '/api/bookings/my';
       const res = await fetch(url, { headers });
@@ -126,18 +118,6 @@ export const ApiService = {
       }
     } catch {
       // Backend not running
-    }
-
-    // Next try Firestore
-    try {
-      const firestoreBookings = isAdmin 
-        ? await FirestoreService.getAllBookings()
-        : await FirestoreService.getBookingsByUser(userId, email);
-      if (Array.isArray(firestoreBookings) && firestoreBookings.length > 0) {
-        return firestoreBookings;
-      }
-    } catch {
-      // Firestore not connected or offline
     }
 
     return ClientStore.getBookingsByUser(userId, email);
@@ -178,15 +158,7 @@ export const ApiService = {
     } catch {
       // Backend not running
     }
-    const updated = ClientStore.updateBookingStatus(id, status, extras);
-    if (updated?.bookingReference) {
-      try {
-        FirestoreService.updateBookingStatus(updated.bookingReference, status);
-      } catch (e) {
-        console.warn('Firestore update status notice:', e);
-      }
-    }
-    return updated;
+    return ClientStore.updateBookingStatus(id, status, extras);
   },
 
   // Submit Review

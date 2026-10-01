@@ -46,6 +46,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   };
 
   const { user, profile, isAdmin, logout, loading } = useAuth();
+  const isStaffOrAdmin = Boolean(isAdmin || profile?.role === 'admin' || profile?.role === 'receptionist');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
 
@@ -148,19 +149,21 @@ export const Navbar: React.FC<NavbarProps> = ({
                 VIP Club
               </button>
 
-              <button
-                id="nav-reception-portal-btn"
-                onClick={() => handleNav('reception')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer ${
-                  active === 'reception'
-                    ? 'bg-white text-[#1C1916] font-bold shadow-xs border border-[#ECE5D8]'
-                    : 'text-[#665E55] hover:text-[#1C1916] hover:bg-[#FAF8F5]'
-                }`}
-                title="Reception Desk"
-              >
-                <Building className="w-3.5 h-3.5 text-[#947139]" />
-                Reception
-              </button>
+              {isStaffOrAdmin && (
+                <button
+                  id="nav-reception-portal-btn"
+                  onClick={() => handleNav('reception')}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer ${
+                    active === 'reception'
+                      ? 'bg-white text-[#1C1916] font-bold shadow-xs border border-[#ECE5D8]'
+                      : 'text-[#665E55] hover:text-[#1C1916] hover:bg-[#FAF8F5]'
+                  }`}
+                  title="Reception & Front Desk"
+                >
+                  <Building className="w-3.5 h-3.5 text-[#947139]" />
+                  Reception
+                </button>
+              )}
 
               {isAdmin && (
                 <button
@@ -233,13 +236,15 @@ export const Navbar: React.FC<NavbarProps> = ({
                         <CalendarCheck className="w-4 h-4 text-[#948A7D]" />
                         My Reservations
                       </button>
-                      <button
-                        onClick={() => handleNav('reception')}
-                        className="w-full px-4 py-2 text-left text-xs font-semibold text-[#7B5C28] hover:bg-[#F6F1E7] flex items-center gap-2 cursor-pointer"
-                      >
-                        <Building className="w-4 h-4 text-[#947139]" />
-                        Grand Reception
-                      </button>
+                      {isStaffOrAdmin && (
+                        <button
+                          onClick={() => handleNav('reception')}
+                          className="w-full px-4 py-2 text-left text-xs font-semibold text-[#7B5C28] hover:bg-[#F6F1E7] flex items-center gap-2 cursor-pointer"
+                        >
+                          <Building className="w-4 h-4 text-[#947139]" />
+                          Grand Reception
+                        </button>
+                      )}
                       {isAdmin && (
                         <button
                           onClick={() => handleNav('admin')}
@@ -374,15 +379,17 @@ export const Navbar: React.FC<NavbarProps> = ({
               VIP Club & Rewards
             </button>
 
-            <button
-              onClick={() => handleNav('reception')}
-              className={`w-full px-4 py-3 rounded-xl text-left text-xs font-semibold uppercase tracking-wider flex items-center gap-3 cursor-pointer ${
-                active === 'reception' ? 'bg-white text-[#1C1916] font-bold border border-[#ECE5D8]' : 'text-[#665E55] hover:bg-white'
-              }`}
-            >
-              <Building className="w-4 h-4 text-[#947139]" />
-              Reception
-            </button>
+            {isStaffOrAdmin && (
+              <button
+                onClick={() => handleNav('reception')}
+                className={`w-full px-4 py-3 rounded-xl text-left text-xs font-semibold uppercase tracking-wider flex items-center gap-3 cursor-pointer ${
+                  active === 'reception' ? 'bg-white text-[#1C1916] font-bold border border-[#ECE5D8]' : 'text-[#665E55] hover:bg-white'
+                }`}
+              >
+                <Building className="w-4 h-4 text-[#947139]" />
+                Reception
+              </button>
+            )}
 
             {isAdmin && (
               <button
@@ -445,6 +452,9 @@ export const Navbar: React.FC<NavbarProps> = ({
         isOpen={authModalOpen}
         onClose={() => setAuthModalOpen(false)}
         initialMode={authModalMode}
+        onSuccess={() => {
+          setAuthModalOpen(false);
+        }}
       />
     </>
   );

@@ -1,7 +1,8 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { requireAuth, optionalAuth, requireAdmin, ADMIN_MASTER_CREDENTIALS, activeAdminTokens, activeUserSessions, AuthRequest, createLocalSessionToken } from './src/middleware/auth.ts';
+import { requireAuth, optionalAuth, requireAdmin, requireStaffOrAdmin, ADMIN_MASTER_CREDENTIALS, activeAdminTokens, activeUserSessions, AuthRequest, createLocalSessionToken } from './src/middleware/auth.ts';
 import {
   seedDatabaseIfEmpty,
   getAllRooms,
@@ -15,6 +16,7 @@ import {
   getAllGuests,
   registerDbUser,
   authenticateDbUser,
+  AuthResult,
   getUserByEmail,
   createBooking,
   getBookingsByUser,
@@ -32,22 +34,56 @@ import {
   checkOutBookingAndRelease,
   updateRoomHousekeepingStatus,
   CATEGORY_ROOM_IMAGES,
+  updateUserPassword,
 } from './src/db/queries.ts';
-import { issueOtp, verifyOtpCode } from './src/utils/otpService.ts';
+import { issueOtp, verifyOtpCode, issueEmailOtp, verifyEmailOtpCode } from './src/utils/otpService.ts';
+import { supabaseAdmin, isSupabaseConfigured } from './src/lib/supabase.ts';
+import { sendOtpEmail, sendWelcomeEmail } from './src/services/emailService.ts';
 
-async function startServer() {
+// In-memory sliding window rate limiter
+interface RateLimitRecord {
+  count: number;
+  resetAt: number;
+}
+const rateLimitStore = new Map<string, RateLimitRecord>();
+
+function checkRateLimit(key: string, maxRequests: number, windowMs: number): { allowed: boolean; retryAfterSeconds?: number } {
+  const now = Date.now();
+  const entry = rateLimitStore.get(key);
+
+  if (!entry || now > entry.resetAt) {
+    rateLimitStore.set(key, { count: 1, resetAt: now + windowMs });
+    return { allowed: true };
+  }
+
+  if (entry.count >= maxRequests) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+    return { allowed: false, retryAfterSeconds };
+  }
+
+  entry.count += 1;
+  return { allowed: true };
+}
+
+export function createApp() {
   const app = express();
-  const PORT = 3000;
 
-  // JSON Body Parser
-  app.use(express.json());
+  // Security Headers Middleware
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
+  });
+
+  // JSON Body Parser with size limit
+  app.use(express.json({ limit: '5mb' }));
 
   // Trigger database initial check and auto-seed if needed
-  try {
-    await seedDatabaseIfEmpty();
-  } catch (err) {
+  seedDatabaseIfEmpty().catch((err) => {
     console.error('Initial database seeding check error:', err);
-  }
+  });
 
   // ----------------------------------------------------
   // PUBLIC & GUEST API ROUTES
@@ -155,13 +191,21 @@ async function startServer() {
         return res.status(400).json({ error: 'Please enter a valid 10-digit mobile number.' });
       }
 
+      // Rate limit OTP dispatch (Max 5 requests per 10 minutes)
+      const clientIp = req.ip || req.socket.remoteAddress || 'ip';
+      const rateLimitCheck = checkRateLimit(`otp_send_${cleanPhone}_${clientIp}`, 5, 10 * 60 * 1000);
+      if (!rateLimitCheck.allowed) {
+        return res.status(429).json({
+          error: `Too many OTP requests. Please wait ${rateLimitCheck.retryAfterSeconds} seconds before requesting a new code.`,
+        });
+      }
+
       const otpResult = issueOtp(cleanPhone, purpose || 'identity_verification');
       res.json({
         success: true,
         message: otpResult.message,
         formattedPhone: otpResult.formattedPhone,
         expiresAt: otpResult.expiresAt,
-        demoOtp: otpResult.code, // Returned for instant testing and simulated SMS banner
       });
     } catch (error: any) {
       console.error('OTP Send error:', error);
@@ -200,8 +244,8 @@ async function startServer() {
   // FRONT DESK RECEPTION PANEL (OFFLINE WALK-INS & GUEST FOLIOS)
   // ----------------------------------------------------
 
-  // Reception walk-in instant booking & check-in
-  app.post('/api/reception/walkin', async (req, res) => {
+  // Reception walk-in instant booking & check-in (Staff / Admin required)
+  app.post('/api/reception/walkin', requireStaffOrAdmin, async (req: AuthRequest, res) => {
     try {
       const {
         roomId,
@@ -264,8 +308,8 @@ async function startServer() {
     }
   });
 
-  // Front desk 1-click Express Check-In with Key Card allocation
-  app.post('/api/reception/checkin', async (req, res) => {
+  // Front desk 1-click Express Check-In with Key Card allocation (Staff / Admin required)
+  app.post('/api/reception/checkin', requireStaffOrAdmin, async (req: AuthRequest, res) => {
     try {
       const { bookingId, keyCardNumber, idProofType, idProofNumber, isOtpVerified } = req.body;
       let bId = Number(bookingId);
@@ -305,8 +349,8 @@ async function startServer() {
     }
   });
 
-  // Front desk Express Check-Out, Folio Settlement, & Room Release for Housekeeping
-  app.post('/api/reception/checkout', async (req, res) => {
+  // Front desk Express Check-Out, Folio Settlement, & Room Release for Housekeeping (Staff / Admin required)
+  app.post('/api/reception/checkout', requireStaffOrAdmin, async (req: AuthRequest, res) => {
     try {
       const { bookingId, settlementMethod } = req.body;
       let bId = Number(bookingId);
@@ -338,8 +382,8 @@ async function startServer() {
     }
   });
 
-  // Add folio incidental charges (Dining, Spa, Laundry, Taxi, Minibar)
-  app.post('/api/reception/folio/add', async (req, res) => {
+  // Add folio incidental charges (Staff / Admin required)
+  app.post('/api/reception/folio/add', requireStaffOrAdmin, async (req: AuthRequest, res) => {
     try {
       const { bookingId, description, category, amount, addedBy } = req.body;
       const bId = Number(bookingId);
@@ -351,7 +395,7 @@ async function startServer() {
         description: String(description).trim(),
         category: category || 'Other',
         amount: Number(amount),
-        addedBy: addedBy || 'Front Desk Staff',
+        addedBy: addedBy || req.user?.name || 'Front Desk Staff',
       });
 
       if (!result.success) {
@@ -365,8 +409,8 @@ async function startServer() {
     }
   });
 
-  // Front desk list all bookings (arrivals, departures, in-house, completed)
-  app.get('/api/reception/bookings', async (req, res) => {
+  // Front desk list all bookings (Staff / Admin required)
+  app.get('/api/reception/bookings', requireStaffOrAdmin, async (req: AuthRequest, res) => {
     try {
       const list = await getAllBookings();
       res.json(list);
@@ -376,8 +420,8 @@ async function startServer() {
     }
   });
 
-  // Front desk & Housekeeping live room status changer
-  app.patch('/api/reception/rooms/:id/housekeeping', async (req, res) => {
+  // Front desk & Housekeeping live room status changer (Staff / Admin required)
+  app.patch('/api/reception/rooms/:id/housekeeping', requireStaffOrAdmin, async (req: AuthRequest, res) => {
     try {
       const id = parseInt(req.params.id, 10);
       const { status } = req.body;
@@ -397,7 +441,7 @@ async function startServer() {
   // AUTHENTICATION & USER PROFILE (DATABASE + FIREBASE)
   // ----------------------------------------------------
 
-  // Register / Sign Up new guest account (saves directly to Cloud SQL)
+  // Register / Sign Up new guest account (saves directly to Cloud SQL & Supabase Auth)
   app.post('/api/auth/signup', async (req, res) => {
     try {
       const { name, email, password, phone } = req.body;
@@ -409,6 +453,47 @@ async function startServer() {
       }
 
       const user = await registerDbUser({ name, email, password, phone });
+      const cleanEmail = email.trim().toLowerCase();
+
+      // 1. Automatically register user in Supabase Auth as Email Provider
+      if (isSupabaseConfigured()) {
+        try {
+          const { data: supaUser, error: supaErr } = await supabaseAdmin.auth.admin.createUser({
+            email: cleanEmail,
+            password: password.trim(),
+            email_confirm: true,
+            user_metadata: {
+              name: name.trim(),
+              phone: phone?.trim() || null,
+              role: user.role || 'guest',
+            },
+          });
+
+          if (supaErr) {
+            if (supaErr.message?.toLowerCase().includes('already registered') || supaErr.message?.toLowerCase().includes('already exists')) {
+              const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+              const existingSupa = listData?.users?.find((u: any) => (u.email || '').toLowerCase() === cleanEmail);
+              if (existingSupa) {
+                await supabaseAdmin.auth.admin.updateUserById(existingSupa.id, {
+                  password: password.trim(),
+                  user_metadata: { name: name.trim(), phone: phone?.trim() || null },
+                });
+              }
+            } else {
+              console.warn('[Supabase Auth Sync Notice]:', supaErr.message);
+            }
+          } else if (supaUser?.user) {
+            console.log(`[Supabase Auth] Created Email provider user: ${cleanEmail} (${supaUser.user.id})`);
+          }
+        } catch (supaEx) {
+          console.warn('[Supabase Auth Sync Exception]:', supaEx);
+        }
+      }
+
+      // 2. Dispatch luxury welcome email to new user
+      sendWelcomeEmail(cleanEmail, user.name || name.trim(), 100).catch((err) => {
+        console.warn('[Welcome Email Dispatch Notice]:', err);
+      });
       
       const sessionData = {
         uid: user.uid,
@@ -433,11 +518,36 @@ async function startServer() {
       });
     } catch (error: any) {
       console.error('Sign up error:', error);
-      res.status(400).json({ error: error.message || 'Failed to create account.' });
+      const isAlreadyExists = error.message?.toLowerCase().includes('already exists') || error.code === 'USER_ALREADY_EXISTS';
+      const statusCode = isAlreadyExists ? 409 : 400;
+      res.status(statusCode).json({
+        error: isAlreadyExists
+          ? 'An account with this email address already exists. Please sign in instead.'
+          : (error.message || 'Failed to create account.'),
+        code: isAlreadyExists ? 'USER_ALREADY_EXISTS' : 'SIGNUP_ERROR',
+        suggestMode: isAlreadyExists ? 'login' : undefined,
+      });
     }
   });
 
-  // Login with Email & Password (authenticated against Cloud SQL database)
+  // Welcome Email Endpoint (can be invoked on OAuth sign-ins or manual triggers)
+  app.post('/api/auth/welcome-email', async (req, res) => {
+    try {
+      const { email, name } = req.body;
+      if (!email || !email.includes('@')) {
+        return res.status(400).json({ error: 'Valid email address is required.' });
+      }
+      const cleanEmail = email.trim().toLowerCase();
+      sendWelcomeEmail(cleanEmail, name, 100).catch((err) => {
+        console.warn('[Welcome Email Notice]:', err);
+      });
+      res.json({ success: true, message: 'Welcome email queued for delivery.' });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to dispatch welcome email.' });
+    }
+  });
+
+  // Login with Email & Password (authenticated against database)
   app.post('/api/auth/login', async (req, res) => {
     try {
       const { email, password } = req.body;
@@ -445,9 +555,25 @@ async function startServer() {
         return res.status(400).json({ error: 'Email and password are required.' });
       }
 
+      // Rate limit login attempts (Max 15 attempts per 15 minutes per IP)
+      const clientIp = req.ip || req.socket.remoteAddress || 'ip';
+      const cleanEmail = String(email).trim().toLowerCase();
+      const rateLimitCheck = checkRateLimit(`login_${cleanEmail}_${clientIp}`, 15, 15 * 60 * 1000);
+      if (!rateLimitCheck.allowed) {
+        return res.status(429).json({
+          error: `Too many login attempts. Please wait ${rateLimitCheck.retryAfterSeconds} seconds before trying again.`,
+        });
+      }
+
       const authResult = await authenticateDbUser(email, password);
-      if (!authResult) {
-        return res.status(401).json({ error: 'Invalid email or password. Please verify your credentials.' });
+      if (authResult.success === false) {
+        const isNotFound = authResult.reason === 'USER_NOT_FOUND';
+        const statusCode = isNotFound ? 404 : 401;
+        return res.status(statusCode).json({
+          error: authResult.message,
+          code: authResult.reason,
+          suggestMode: isNotFound ? 'signup' : undefined,
+        });
       }
 
       const { user, isAdmin } = authResult;
@@ -485,6 +611,169 @@ async function startServer() {
       activeAdminTokens.delete(token);
     }
     res.json({ success: true, message: 'Logged out successfully.' });
+  });
+
+  // ----------------------------------------------------
+  // FORGOT PASSWORD VIA EMAIL OTP & PASSWORD RESET
+  // ----------------------------------------------------
+
+  // Step 1: Send OTP to email
+  app.post('/api/auth/forgot-password/send-otp', async (req, res) => {
+    try {
+      const { email } = req.body;
+      if (!email || typeof email !== 'string' || !email.includes('@')) {
+        return res.status(400).json({ error: 'Please provide a valid email address.' });
+      }
+
+      const cleanEmail = email.trim().toLowerCase();
+
+      // Rate limit OTP send (Max 5 requests per 15 minutes)
+      const clientIp = req.ip || req.socket.remoteAddress || 'ip';
+      const rateLimitCheck = checkRateLimit(`forgot_otp_${cleanEmail}_${clientIp}`, 5, 15 * 60 * 1000);
+      if (!rateLimitCheck.allowed) {
+        return res.status(429).json({
+          error: `Too many password reset requests. Please wait ${rateLimitCheck.retryAfterSeconds} seconds before requesting a new code.`,
+        });
+      }
+
+      // 1. Verify user exists in database or master credentials
+      const isMasterAdmin = cleanEmail === 'admin@grandimperialpalace.in' || cleanEmail === 'davekaran2006@gmail.com';
+      let userExists = isMasterAdmin;
+
+      if (!userExists) {
+        const dbUser = await getUserByEmail(cleanEmail);
+        if (dbUser) userExists = true;
+      }
+
+      // 2. Also verify against Supabase Auth users if configured
+      if (!userExists && isSupabaseConfigured()) {
+        try {
+          const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
+          const supaUser = usersData?.users?.find(
+            (u: any) => (u.email || '').toLowerCase() === cleanEmail
+          );
+          if (supaUser) userExists = true;
+        } catch (supaErr) {
+          console.warn('Supabase check user notice:', supaErr);
+        }
+      }
+
+      if (!userExists) {
+        return res.status(404).json({
+          success: false,
+          error: 'No account found with this email address. Please create a new account by signing up.',
+          code: 'USER_NOT_FOUND',
+          suggestMode: 'signup',
+        });
+      }
+
+      const otpRes = issueEmailOtp(cleanEmail);
+
+      // 3. Dispatch formatted HTML OTP email via Nodemailer
+      sendOtpEmail(cleanEmail, otpRes.code).catch((err) => {
+        console.warn('[Email Dispatch Notice]:', err);
+      });
+
+      console.log(`[Palace Auth] Password Reset OTP dispatched for ${cleanEmail}`);
+
+      res.json({
+        success: true,
+        message: `A 6-digit verification code has been dispatched to ${otpRes.maskedEmail}. Please check your inbox.`,
+        expiresAt: otpRes.expiresAt,
+        maskedEmail: otpRes.maskedEmail,
+      });
+    } catch (error: any) {
+      console.error('Send forgot password OTP error:', error);
+      res.status(500).json({ error: error.message || 'Failed to dispatch verification code.' });
+    }
+  });
+
+  // Step 2: Verify OTP code
+  app.post('/api/auth/forgot-password/verify-otp', async (req, res) => {
+    try {
+      const { email, otp, code } = req.body;
+      const cleanEmail = String(email || '').trim().toLowerCase();
+      const inputCode = String(otp || code || '').trim();
+
+      if (!cleanEmail || !inputCode) {
+        return res.status(400).json({ error: 'Both email and 6-digit OTP code are required.' });
+      }
+
+      // Rate limit OTP verify attempts
+      const clientIp = req.ip || req.socket.remoteAddress || 'ip';
+      const rateLimitCheck = checkRateLimit(`verify_otp_${cleanEmail}_${clientIp}`, 10, 15 * 60 * 1000);
+      if (!rateLimitCheck.allowed) {
+        return res.status(429).json({
+          error: `Too many verification attempts. Please wait ${rateLimitCheck.retryAfterSeconds} seconds.`,
+        });
+      }
+
+      const verifyResult = verifyEmailOtpCode(cleanEmail, inputCode, false);
+      if (!verifyResult.success) {
+        return res.status(400).json({ error: verifyResult.error || 'Invalid or expired OTP code.' });
+      }
+
+      res.json({
+        success: true,
+        verified: true,
+        message: 'OTP verified successfully. You may now enter your new password.',
+      });
+    } catch (error: any) {
+      console.error('Verify forgot password OTP error:', error);
+      res.status(500).json({ error: error.message || 'Failed to verify code.' });
+    }
+  });
+
+  // Step 3: Reset password with OTP
+  app.post('/api/auth/forgot-password/reset-password', async (req, res) => {
+    try {
+      const { email, otp, code, newPassword } = req.body;
+      const cleanEmail = String(email || '').trim().toLowerCase();
+      const inputCode = String(otp || code || '').trim();
+      const cleanPassword = String(newPassword || '').trim();
+
+      if (!cleanEmail || !inputCode || !cleanPassword) {
+        return res.status(400).json({ error: 'Email, OTP code, and new password are required.' });
+      }
+
+      if (cleanPassword.length < 5) {
+        return res.status(400).json({ error: 'New password must be at least 5 characters long.' });
+      }
+
+      // 1. Verify and consume OTP
+      const verifyResult = verifyEmailOtpCode(cleanEmail, inputCode, true);
+      if (!verifyResult.success) {
+        return res.status(400).json({ error: verifyResult.error || 'Invalid or expired OTP code.' });
+      }
+
+      // 2. Update password in PostgreSQL / In-Memory database
+      await updateUserPassword(cleanEmail, cleanPassword);
+
+      // 3. Update password in Supabase Auth if user exists
+      if (isSupabaseConfigured()) {
+        try {
+          const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
+          const supaUser = usersData?.users?.find(
+            (u: any) => (u.email || '').toLowerCase() === cleanEmail
+          );
+          if (supaUser) {
+            await supabaseAdmin.auth.admin.updateUserById(supaUser.id, {
+              password: cleanPassword,
+            });
+          }
+        } catch (supaErr) {
+          console.warn('Supabase admin update password notice:', supaErr);
+        }
+      }
+
+      res.json({
+        success: true,
+        message: 'Your password has been changed successfully. You can now sign in with your new password.',
+      });
+    } catch (error: any) {
+      console.error('Reset password error:', error);
+      res.status(500).json({ error: error.message || 'Failed to update password.' });
+    }
   });
 
   // Verify current session
@@ -541,17 +830,18 @@ async function startServer() {
     }
   });
 
-  // Update user profile
+  // Update user profile (Security fix: prevent regular users from elevating role)
   app.put('/api/user/profile', requireAuth, async (req: AuthRequest, res) => {
     try {
       const { name, phone, address, country, avatar, role } = req.body;
+      const isActuallyAdmin = req.isAdmin === true || req.user?.role === 'admin';
       const updated = await updateUserProfile(req.user!.uid, {
-        ...(name !== undefined && { name }),
-        ...(phone !== undefined && { phone }),
-        ...(address !== undefined && { address }),
-        ...(country !== undefined && { country }),
-        ...(avatar !== undefined && { avatar }),
-        ...(role !== undefined && { role }),
+        ...(name !== undefined && { name: String(name).trim() }),
+        ...(phone !== undefined && { phone: String(phone).trim() }),
+        ...(address !== undefined && { address: String(address).trim() }),
+        ...(country !== undefined && { country: String(country).trim() }),
+        ...(avatar !== undefined && { avatar: String(avatar).trim() }),
+        ...(isActuallyAdmin && role !== undefined && { role: String(role).trim() }),
       });
       res.json(updated);
     } catch (error: any) {
@@ -658,10 +948,26 @@ async function startServer() {
     }
   });
 
-  // Cancel booking (Guest or Admin)
+  // Cancel booking (Security fix: IDOR protection - only owner or admin can cancel)
   app.post('/api/bookings/:id/cancel', requireAuth, async (req: AuthRequest, res) => {
     try {
       const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid booking identifier.' });
+
+      const allBookings = await getAllBookings();
+      const targetBooking = allBookings.find((b) => b.id === id);
+
+      if (!targetBooking) {
+        return res.status(404).json({ error: 'Reservation record not found.' });
+      }
+
+      const isOwner = targetBooking.userId === req.user!.uid;
+      const isAdminUser = req.isAdmin === true || req.user?.role === 'admin';
+
+      if (!isOwner && !isAdminUser) {
+        return res.status(403).json({ error: 'Forbidden: You cannot cancel a reservation belonging to another guest.' });
+      }
+
       const { reason } = req.body;
       const updated = await updateBookingStatus(id, 'cancelled', reason || 'Cancelled by guest');
       res.json(updated);
@@ -978,16 +1284,23 @@ async function startServer() {
     }
   });
 
+  return app;
+}
+
+export async function startServer() {
+  const app = createApp();
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+
   // ----------------------------------------------------
-  // VITE & STATIC FILES SERVING
+  // VITE & STATIC FILES SERVING (Standalone Server Mode)
   // ----------------------------------------------------
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (!process.env.VERCEL) {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
@@ -995,9 +1308,45 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Hotel Reservation System server running on http://localhost:${PORT}`);
-  });
+  // Sync default database accounts to Supabase Auth so they appear with Email provider in dashboard
+  if (isSupabaseConfigured()) {
+    (async () => {
+      try {
+        const defaultUsers = [
+          { email: 'guest@grandimperialpalace.in', password: 'guest123', name: 'Maharaja Royal Guest', role: 'guest' },
+          { email: 'admin@grandimperialpalace.in', password: 'ImperialAdmin', name: 'Palace General Manager', role: 'admin' },
+          { email: 'davekaran2006@gmail.com', password: 'ImperialAdmin', name: 'Karan Dave', role: 'admin' },
+        ];
+
+        const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+        const existingEmails = new Set((listData?.users || []).map((u: any) => (u.email || '').toLowerCase()));
+
+        for (const def of defaultUsers) {
+          if (!existingEmails.has(def.email.toLowerCase())) {
+            await supabaseAdmin.auth.admin.createUser({
+              email: def.email.toLowerCase(),
+              password: def.password,
+              email_confirm: true,
+              user_metadata: { name: def.name, role: def.role },
+            }).catch(() => null);
+          }
+        }
+      } catch (err) {
+        console.warn('[Supabase Initial User Sync Notice]:', err);
+      }
+    })();
+  }
+
+  if (!process.env.VERCEL) {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Hotel Reservation System server running on http://localhost:${PORT}`);
+    });
+  }
+
+  return app;
 }
 
-startServer();
+// Auto-start server when executed directly
+if (!process.env.VERCEL) {
+  startServer();
+}

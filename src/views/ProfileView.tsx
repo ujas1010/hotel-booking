@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { AuthModal } from '../components/AuthModal.tsx';
-import { FirestoreService } from '../services/firestoreService.ts';
+import { supabase, isSupabaseConfigured } from '../lib/supabase.ts';
 import {
   User,
   Mail,
@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 
 export const ProfileView: React.FC = () => {
-  const { user, profile, updateLocalProfile, apiFetch, isAdmin } = useAuth();
+  const { user, profile, updateLocalProfile, apiFetch, isAdmin, refreshProfile } = useAuth();
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'signup'>('login');
 
@@ -65,17 +65,32 @@ export const ProfileView: React.FC = () => {
     setErrorMessage('');
 
     try {
+      const formattedPhone = phone.trim() ? `+91 ${phone.replace(/\D/g, '')}` : '';
       const profileData = {
         name: name.trim(),
-        phone: phone.trim() ? `+91 ${phone.replace(/\D/g, '')}` : '',
+        phone: formattedPhone,
         address: address.trim(),
-        country: country.trim(),
+        country: country.trim() || 'India',
       };
 
-      // 1. Save directly to Cloud Firestore
-      await FirestoreService.saveUserProfile(user.uid, profileData);
+      // 1. Save directly to Supabase profiles table if configured
+      if (isSupabaseConfigured() && user.uid) {
+        try {
+          await supabase.from('profiles').upsert({
+            id: user.uid,
+            name: profileData.name,
+            email: user.email,
+            phone: profileData.phone,
+            address: profileData.address,
+            country: profileData.country,
+            updated_at: new Date().toISOString(),
+          });
+        } catch (supaErr) {
+          console.warn('Supabase profile save notice:', supaErr);
+        }
+      }
 
-      // 2. Also sync to backend API if available
+      // 2. Also sync to backend API
       try {
         const res = await apiFetch('/api/user/profile', {
           method: 'PUT',
@@ -143,6 +158,10 @@ export const ProfileView: React.FC = () => {
           isOpen={authModalOpen}
           onClose={() => setAuthModalOpen(false)}
           initialMode={authModalMode}
+          onSuccess={() => {
+            setAuthModalOpen(false);
+            if (refreshProfile) refreshProfile();
+          }}
         />
       </>
     );

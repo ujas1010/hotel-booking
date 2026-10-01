@@ -1072,6 +1072,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       <AuthModal
         isOpen={authModalOpen}
         onClose={() => setAuthModalOpen(false)}
+        onSuccess={() => setAuthModalOpen(false)}
       />
     </div>
   );

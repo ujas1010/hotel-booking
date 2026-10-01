@@ -492,7 +492,7 @@ export const BookingBar: React.FC<BookingBarProps> = ({
 
       {/* LUXURY INTERACTIVE CALENDAR POPOVER */}
       {calendarOpen && (
-        <div className="absolute top-full left-0 right-0 mt-3 bg-white rounded-3xl border border-[#E5DAC6] shadow-[0_25px_60px_rgba(28,25,22,0.18)] p-5 sm:p-6 z-50 animate-in fade-in zoom-in-95 duration-150">
+        <div className="absolute top-full left-0 right-0 mt-3 bg-white rounded-3xl border border-[#E5DAC6] shadow-[0_25px_60px_rgba(28,25,22,0.18)] p-4 sm:p-6 z-50 animate-in fade-in zoom-in-95 duration-150 max-h-[85vh] overflow-y-auto">
           {/* Header of Calendar Modal */}
           <div className="flex items-center justify-between pb-4 mb-4 border-b border-[#F3ECE1]">
             <div className="flex items-center gap-3">
