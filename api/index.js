@@ -2567,6 +2567,63 @@ var optionalAuth = async (req, res, next) => {
 // src/utils/otpService.ts
 var otpStore = /* @__PURE__ */ new Map();
 var emailOtpStore = /* @__PURE__ */ new Map();
+var OTP_SECRET = (typeof process !== "undefined" && process.env ? process.env.SESSION_SECRET || process.env.SUPABASE_ANON_KEY : "") || "palace_regal_otp_secret_key_2026";
+function computeHash(payload) {
+  let h1 = 3735928559 ^ OTP_SECRET.length;
+  let h2 = 1103547991 ^ OTP_SECRET.length;
+  const str = payload + "|" + OTP_SECRET;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ h1 >>> 16, 2246822507) ^ Math.imul(h2 ^ h2 >>> 13, 3266489909);
+  h2 = Math.imul(h2 ^ h2 >>> 16, 2246822507) ^ Math.imul(h1 ^ h1 >>> 13, 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+function createSignedResetToken(email, code, expiresAt) {
+  const normEmail = email.trim().toLowerCase();
+  const cleanCode = code.trim();
+  const sig = computeHash(`${normEmail}:${cleanCode}:${expiresAt}`);
+  const payload = {
+    email: normEmail,
+    codeHash: computeHash(cleanCode),
+    expiresAt,
+    sig
+  };
+  try {
+    return btoa(JSON.stringify(payload));
+  } catch {
+    return Buffer.from(JSON.stringify(payload)).toString("base64");
+  }
+}
+function verifySignedResetToken(email, inputCode, token) {
+  if (!token) return { valid: false, error: "No verification token provided." };
+  try {
+    let jsonStr = "";
+    try {
+      jsonStr = atob(token);
+    } catch {
+      jsonStr = Buffer.from(token, "base64").toString("utf8");
+    }
+    const data = JSON.parse(jsonStr);
+    const normEmail = email.trim().toLowerCase();
+    const cleanInput = inputCode.trim();
+    if (data.email !== normEmail) {
+      return { valid: false, error: "Reset session does not match this email address." };
+    }
+    if (Date.now() > data.expiresAt) {
+      return { valid: false, error: "The verification code has expired. Please request a new code." };
+    }
+    const expectedSig = computeHash(`${normEmail}:${cleanInput}:${data.expiresAt}`);
+    if (data.sig !== expectedSig) {
+      return { valid: false, error: "Invalid verification code. Please check your email and try again." };
+    }
+    return { valid: true };
+  } catch (err) {
+    return { valid: false, error: "Invalid verification session." };
+  }
+}
 function generateOtpCode() {
   if (typeof globalThis !== "undefined" && globalThis.crypto && typeof globalThis.crypto.getRandomValues === "function") {
     const array = new Uint32Array(1);
@@ -2640,6 +2697,7 @@ function issueEmailOtp(email) {
   const now = Date.now();
   const expiresAt = now + 10 * 60 * 1e3;
   const masked = maskEmail(normEmail);
+  const resetToken = createSignedResetToken(normEmail, code, expiresAt);
   const record = {
     target: normEmail,
     code,
@@ -2655,35 +2713,46 @@ function issueEmailOtp(email) {
     code,
     expiresAt,
     maskedEmail: masked,
+    resetToken,
     message: `A 6-digit password reset code has been sent to ${masked}.`
   };
 }
-function verifyEmailOtpCode(email, inputCode, consume = true) {
+function verifyEmailOtpCode(email, inputCode, consume = true, resetToken) {
   const normEmail = email.trim().toLowerCase();
   const cleanInput = (inputCode || "").trim();
   const record = emailOtpStore.get(normEmail);
-  if (!record) {
-    return { success: false, error: "No active OTP request found for this email address. Please request a new code." };
-  }
-  if (Date.now() > record.expiresAt) {
-    emailOtpStore.delete(normEmail);
-    return { success: false, error: "The verification code has expired. Please request a new code." };
-  }
-  record.attempts += 1;
-  if (record.attempts > 5) {
-    emailOtpStore.delete(normEmail);
-    return { success: false, error: "Too many incorrect attempts. Please request a new code." };
-  }
-  if (record.code === cleanInput) {
-    record.verified = true;
-    if (consume) {
+  if (record) {
+    if (Date.now() > record.expiresAt) {
       emailOtpStore.delete(normEmail);
+      return { success: false, error: "The verification code has expired. Please request a new code." };
     }
-    return { success: true };
+    record.attempts += 1;
+    if (record.attempts > 5) {
+      emailOtpStore.delete(normEmail);
+      return { success: false, error: "Too many incorrect attempts. Please request a new code." };
+    }
+    if (record.code === cleanInput) {
+      record.verified = true;
+      if (consume) {
+        emailOtpStore.delete(normEmail);
+      }
+      return { success: true };
+    }
+    return {
+      success: false,
+      error: `Invalid verification code. Please check your email and try again. (${5 - record.attempts} attempts remaining)`
+    };
+  }
+  if (resetToken) {
+    const tokenResult = verifySignedResetToken(normEmail, cleanInput, resetToken);
+    if (tokenResult.valid) {
+      return { success: true };
+    }
+    return { success: false, error: tokenResult.error || "Invalid verification code." };
   }
   return {
     success: false,
-    error: `Invalid verification code. Please check your email and try again. (${5 - record.attempts} attempts remaining)`
+    error: "No active OTP request found for this email address. Please request a new code."
   };
 }
 
@@ -2699,8 +2768,15 @@ function getTransporter() {
   const pass = (process.env.GMAIL_APP_PASSWORD || process.env.SMTP_PASS || process.env.EMAIL_PASS || "").replace(/\s+/g, "").trim();
   if (user && pass && (user.includes("@gmail.com") || process.env.GMAIL_USER || process.env.GMAIL_APP_PASSWORD)) {
     transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: { user, pass }
+      host: "smtp.gmail.com",
+      port: 465,
+      secure: true,
+      auth: { user, pass },
+      pool: true,
+      maxConnections: 5,
+      connectionTimeout: 8e3,
+      greetingTimeout: 8e3,
+      socketTimeout: 12e3
     });
     return transporter;
   }
@@ -3435,15 +3511,18 @@ function createApp() {
         });
       }
       const otpRes = issueEmailOtp(cleanEmail);
-      sendOtpEmail(cleanEmail, otpRes.code).catch((err) => {
-        console.warn("[Email Dispatch Notice]:", err);
-      });
-      console.log(`[Palace Auth] Password Reset OTP dispatched for ${cleanEmail}`);
+      try {
+        await sendOtpEmail(cleanEmail, otpRes.code);
+        console.log(`[Palace Auth] Password Reset OTP dispatched for ${cleanEmail}`);
+      } catch (mailErr) {
+        console.warn("[Email Dispatch Notice]:", mailErr.message);
+      }
       res.json({
         success: true,
         message: `A 6-digit verification code has been dispatched to ${otpRes.maskedEmail}. Please check your inbox.`,
         expiresAt: otpRes.expiresAt,
         maskedEmail: otpRes.maskedEmail,
+        resetToken: otpRes.resetToken,
         demoOtp: process.env.NODE_ENV !== "production" ? otpRes.code : void 0
       });
     } catch (error) {
@@ -3453,7 +3532,7 @@ function createApp() {
   });
   app2.post("/api/auth/forgot-password/verify-otp", async (req, res) => {
     try {
-      const { email, otp, code } = req.body;
+      const { email, otp, code, resetToken } = req.body;
       const cleanEmail = String(email || "").trim().toLowerCase();
       const inputCode = String(otp || code || "").trim();
       if (!cleanEmail || !inputCode) {
@@ -3466,13 +3545,14 @@ function createApp() {
           error: `Too many verification attempts. Please wait ${rateLimitCheck.retryAfterSeconds} seconds.`
         });
       }
-      const verifyResult = verifyEmailOtpCode(cleanEmail, inputCode, false);
+      const verifyResult = verifyEmailOtpCode(cleanEmail, inputCode, false, resetToken);
       if (!verifyResult.success) {
         return res.status(400).json({ error: verifyResult.error || "Invalid or expired OTP code." });
       }
       res.json({
         success: true,
         verified: true,
+        resetToken,
         message: "OTP verified successfully. You may now enter your new password."
       });
     } catch (error) {
@@ -3482,7 +3562,7 @@ function createApp() {
   });
   app2.post("/api/auth/forgot-password/reset-password", async (req, res) => {
     try {
-      const { email, otp, code, newPassword } = req.body;
+      const { email, otp, code, newPassword, resetToken } = req.body;
       const cleanEmail = String(email || "").trim().toLowerCase();
       const inputCode = String(otp || code || "").trim();
       const cleanPassword = String(newPassword || "").trim();
@@ -3492,7 +3572,7 @@ function createApp() {
       if (cleanPassword.length < 5) {
         return res.status(400).json({ error: "New password must be at least 5 characters long." });
       }
-      const verifyResult = verifyEmailOtpCode(cleanEmail, inputCode, true);
+      const verifyResult = verifyEmailOtpCode(cleanEmail, inputCode, true, resetToken);
       if (!verifyResult.success) {
         return res.status(400).json({ error: verifyResult.error || "Invalid or expired OTP code." });
       }

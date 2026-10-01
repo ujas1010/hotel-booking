@@ -25,9 +25,9 @@ interface AuthContextType {
   logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   updateLocalProfile: (data: Partial<UserProfile>) => void;
-  sendForgotPasswordOtp: (email: string) => Promise<{ success: boolean; message?: string; error?: string; demoOtp?: string; expiresAt?: number; maskedEmail?: string }>;
-  verifyForgotPasswordOtp: (email: string, otp: string) => Promise<{ success: boolean; message?: string; error?: string }>;
-  resetPasswordWithOtp: (email: string, otp: string, newPassword: string) => Promise<{ success: boolean; message?: string; error?: string }>;
+  sendForgotPasswordOtp: (email: string) => Promise<{ success: boolean; message?: string; error?: string; demoOtp?: string; expiresAt?: number; maskedEmail?: string; resetToken?: string }>;
+  verifyForgotPasswordOtp: (email: string, otp: string, resetToken?: string) => Promise<{ success: boolean; message?: string; error?: string; resetToken?: string }>;
+  resetPasswordWithOtp: (email: string, otp: string, newPassword: string, resetToken?: string) => Promise<{ success: boolean; message?: string; error?: string }>;
   apiFetch: (url: string, options?: RequestInit) => Promise<Response>;
 }
 
@@ -964,6 +964,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         demoOtp: data.demoOtp,
         expiresAt: data.expiresAt,
         maskedEmail: data.maskedEmail,
+        resetToken: data.resetToken,
       };
     } catch (err: any) {
       return { success: false, error: err.message || 'Network error while requesting password reset OTP.' };
@@ -971,13 +972,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // Verify Forgot Password OTP
-  const verifyForgotPasswordOtp = async (email: string, otp: string) => {
+  const verifyForgotPasswordOtp = async (email: string, otp: string, resetToken?: string) => {
     try {
       const cleanEmail = email.trim().toLowerCase();
       const res = await fetch('/api/auth/forgot-password/verify-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: cleanEmail, otp: otp.trim() }),
+        body: JSON.stringify({ email: cleanEmail, otp: otp.trim(), resetToken }),
       });
 
       const data = await res.json();
@@ -985,14 +986,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { success: false, error: data.error || 'Invalid or expired verification code.' };
       }
 
-      return { success: true, message: data.message };
+      return { success: true, message: data.message, resetToken: data.resetToken || resetToken };
     } catch (err: any) {
       return { success: false, error: err.message || 'Network error while verifying OTP code.' };
     }
   };
 
   // Reset Password with OTP
-  const resetPasswordWithOtp = async (email: string, otp: string, newPassword: string) => {
+  const resetPasswordWithOtp = async (email: string, otp: string, newPassword: string, resetToken?: string) => {
     try {
       const cleanEmail = email.trim().toLowerCase();
       const res = await fetch('/api/auth/forgot-password/reset-password', {
@@ -1002,6 +1003,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           email: cleanEmail,
           otp: otp.trim(),
           newPassword: newPassword.trim(),
+          resetToken,
         }),
       });
 

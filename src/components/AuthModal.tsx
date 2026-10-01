@@ -59,6 +59,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [maskedEmail, setMaskedEmail] = useState('');
   const [demoOtp, setDemoOtp] = useState<string | null>(null);
+  const [resetToken, setResetToken] = useState<string | null>(null);
   const [resendTimer, setResendTimer] = useState(0);
 
   const [loading, setLoading] = useState(false);
@@ -83,6 +84,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setError(null);
       setSuccessMsg(null);
       setDemoOtp(null);
+      setResetToken(null);
     }
   }, [isOpen, initialMode]);
 
@@ -232,6 +234,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       if (res.demoOtp) {
         setDemoOtp(res.demoOtp);
       }
+      if (res.resetToken) {
+        setResetToken(res.resetToken);
+      }
       setSuccessMsg(res.message || 'Verification code sent to your email.');
       setForgotStep('verify_otp');
       setResendTimer(60);
@@ -251,6 +256,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const res = await sendForgotPasswordOtp(email.trim());
       if (res.success) {
         if (res.demoOtp) setDemoOtp(res.demoOtp);
+        if (res.resetToken) setResetToken(res.resetToken);
         setSuccessMsg('A fresh verification code has been dispatched.');
         setResendTimer(60);
       } else {
@@ -275,13 +281,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     setLoading(true);
     try {
-      const res = await verifyForgotPasswordOtp(email.trim(), otpCode.trim());
+      const res = await verifyForgotPasswordOtp(email.trim(), otpCode.trim(), resetToken || undefined);
       if (!res.success) {
         setError(res.error || 'Invalid or expired verification code.');
         setLoading(false);
         return;
       }
 
+      if (res.resetToken) {
+        setResetToken(res.resetToken);
+      }
       setSuccessMsg('Verification code confirmed! Please create your new password.');
       setForgotStep('set_new_password');
     } catch (err: any) {
@@ -308,7 +317,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     setLoading(true);
     try {
-      const res = await resetPasswordWithOtp(email.trim(), otpCode.trim(), newPassword.trim());
+      const res = await resetPasswordWithOtp(email.trim(), otpCode.trim(), newPassword.trim(), resetToken || undefined);
       if (!res.success) {
         setError(res.error || 'Failed to reset password.');
         setLoading(false);
@@ -325,6 +334,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setNewPassword('');
         setConfirmPassword('');
         setDemoOtp(null);
+        setResetToken(null);
         setError(null);
         setSuccessMsg('Password updated! You can now sign in with your new password.');
         setLoading(false);

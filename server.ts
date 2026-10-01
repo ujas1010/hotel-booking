@@ -676,18 +676,20 @@ export function createApp() {
 
       const otpRes = issueEmailOtp(cleanEmail);
 
-      // Dispatch formatted HTML OTP email via Nodemailer
-      sendOtpEmail(cleanEmail, otpRes.code).catch((err) => {
-        console.warn('[Email Dispatch Notice]:', err);
-      });
-
-      console.log(`[Palace Auth] Password Reset OTP dispatched for ${cleanEmail}`);
+      // Dispatch formatted HTML OTP email via Nodemailer (await to prevent serverless process freezing)
+      try {
+        await sendOtpEmail(cleanEmail, otpRes.code);
+        console.log(`[Palace Auth] Password Reset OTP dispatched for ${cleanEmail}`);
+      } catch (mailErr: any) {
+        console.warn('[Email Dispatch Notice]:', mailErr.message);
+      }
 
       res.json({
         success: true,
         message: `A 6-digit verification code has been dispatched to ${otpRes.maskedEmail}. Please check your inbox.`,
         expiresAt: otpRes.expiresAt,
         maskedEmail: otpRes.maskedEmail,
+        resetToken: otpRes.resetToken,
         demoOtp: process.env.NODE_ENV !== 'production' ? otpRes.code : undefined,
       });
     } catch (error: any) {
@@ -699,7 +701,7 @@ export function createApp() {
   // Step 2: Verify OTP code
   app.post('/api/auth/forgot-password/verify-otp', async (req, res) => {
     try {
-      const { email, otp, code } = req.body;
+      const { email, otp, code, resetToken } = req.body;
       const cleanEmail = String(email || '').trim().toLowerCase();
       const inputCode = String(otp || code || '').trim();
 
@@ -716,7 +718,7 @@ export function createApp() {
         });
       }
 
-      const verifyResult = verifyEmailOtpCode(cleanEmail, inputCode, false);
+      const verifyResult = verifyEmailOtpCode(cleanEmail, inputCode, false, resetToken);
       if (!verifyResult.success) {
         return res.status(400).json({ error: verifyResult.error || 'Invalid or expired OTP code.' });
       }
@@ -724,6 +726,7 @@ export function createApp() {
       res.json({
         success: true,
         verified: true,
+        resetToken,
         message: 'OTP verified successfully. You may now enter your new password.',
       });
     } catch (error: any) {
@@ -735,7 +738,7 @@ export function createApp() {
   // Step 3: Reset password with OTP
   app.post('/api/auth/forgot-password/reset-password', async (req, res) => {
     try {
-      const { email, otp, code, newPassword } = req.body;
+      const { email, otp, code, newPassword, resetToken } = req.body;
       const cleanEmail = String(email || '').trim().toLowerCase();
       const inputCode = String(otp || code || '').trim();
       const cleanPassword = String(newPassword || '').trim();
@@ -748,8 +751,8 @@ export function createApp() {
         return res.status(400).json({ error: 'New password must be at least 5 characters long.' });
       }
 
-      // 1. Verify and consume OTP
-      const verifyResult = verifyEmailOtpCode(cleanEmail, inputCode, true);
+      // 1. Verify and consume OTP (supports serverless token persistence)
+      const verifyResult = verifyEmailOtpCode(cleanEmail, inputCode, true, resetToken);
       if (!verifyResult.success) {
         return res.status(400).json({ error: verifyResult.error || 'Invalid or expired OTP code.' });
       }

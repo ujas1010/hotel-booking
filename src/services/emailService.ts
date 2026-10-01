@@ -12,11 +12,18 @@ function getTransporter(): any {
   const user = (process.env.GMAIL_USER || process.env.SMTP_USER || process.env.EMAIL_USER || '').trim();
   const pass = (process.env.GMAIL_APP_PASSWORD || process.env.SMTP_PASS || process.env.EMAIL_PASS || '').replace(/\s+/g, '').trim();
 
-  // 1. Gmail SMTP service
+  // 1. Gmail SMTP service (Fast Direct Connection)
   if (user && pass && (user.includes('@gmail.com') || process.env.GMAIL_USER || process.env.GMAIL_APP_PASSWORD)) {
     transporter = nodemailer.createTransport({
-      service: 'gmail',
+      host: 'smtp.gmail.com',
+      port: 465,
+      secure: true,
       auth: { user, pass },
+      pool: true,
+      maxConnections: 5,
+      connectionTimeout: 8000,
+      greetingTimeout: 8000,
+      socketTimeout: 12000,
     });
     return transporter;
   }
