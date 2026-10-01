@@ -1354,7 +1354,12 @@ export async function startServer() {
   return app;
 }
 
-// Auto-start server when executed directly
-if (!process.env.VERCEL) {
+// Auto-start server only when executed directly as entry script (not when imported as module)
+const isMainScript = !process.env.VERCEL && (
+  typeof process !== 'undefined' && process.argv && process.argv[1] &&
+  (process.argv[1].includes('server.ts') || process.argv[1].includes('server.cjs') || process.argv[1].includes('server.js'))
+);
+
+if (isMainScript) {
   startServer();
 }
