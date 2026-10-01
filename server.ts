@@ -94,6 +94,14 @@ export function createApp() {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
+  // Safe Public Client Auth Configuration (for browser Google OAuth)
+  app.get('/api/auth/config', (req, res) => {
+    res.json({
+      supabaseUrl: (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '').trim(),
+      supabaseAnonKey: (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '').trim(),
+    });
+  });
+
   // Hotel general settings & policies
   app.get('/api/settings', async (req, res) => {
     try {

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { supabase, isSupabaseConfigured } from '../lib/supabase.ts';
+import { supabase, isSupabaseConfigured, configureSupabase } from '../lib/supabase.ts';
 import { UserProfile } from '../types.ts';
 
 export interface AppUser {
@@ -213,6 +213,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Restore stored session on mount
   useEffect(() => {
     const restoreSession = async () => {
+      // 0. Auto-sync Supabase Config from Backend API if not statically configured
+      try {
+        const configRes = await fetch('/api/auth/config');
+        if (configRes.ok) {
+          const cfg = await configRes.json();
+          if (cfg.supabaseUrl && cfg.supabaseAnonKey) {
+            configureSupabase(cfg.supabaseUrl, cfg.supabaseAnonKey);
+          }
+        }
+      } catch {}
+
       // 1. Check Supabase active session
       if (isSupabaseConfigured()) {
         try {
@@ -878,10 +889,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Google OAuth Login via Supabase (with smooth demo fallback)
+  // Google OAuth Login via Supabase
   const loginWithGoogle = async () => {
     try {
       setLoading(true);
+      if (!isSupabaseConfigured()) {
+        try {
+          const configRes = await fetch('/api/auth/config');
+          if (configRes.ok) {
+            const cfg = await configRes.json();
+            if (cfg.supabaseUrl && cfg.supabaseAnonKey) {
+              configureSupabase(cfg.supabaseUrl, cfg.supabaseAnonKey);
+            }
+          }
+        } catch {}
+      }
+
       if (isSupabaseConfigured()) {
         const { error } = await supabase.auth.signInWithOAuth({
           provider: 'google',
@@ -891,41 +914,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
         if (error) throw error;
       } else {
-        // Smooth Google Demo Patron Sign-In when Supabase keys are not provided
-        const appUser: AppUser = {
-          uid: 'google_patron_uid_2026',
-          email: 'patron.vip@grandimperialpalace.in',
-          displayName: 'Royal Patron (Google Sign-In)',
-          photoURL: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80',
-        };
-        const tokenStr = createClientSessionToken({
-          uid: appUser.uid,
-          email: appUser.email!,
-          name: appUser.displayName!,
-          role: 'guest',
-        });
-        const appProfile: UserProfile = {
-          id: Date.now(),
-          uid: appUser.uid,
-          email: appUser.email!,
-          name: appUser.displayName!,
-          role: 'guest',
-          phone: '+91 98765 43210',
-          address: '108 Heritage Promenade, Mumbai',
-          country: 'India',
-          avatar: appUser.photoURL,
-          loyaltyPoints: 1200,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        setToken(tokenStr);
-        setUser(appUser);
-        setProfile(appProfile);
-        try {
-          localStorage.setItem('grand_imperial_user_token', tokenStr);
-        } catch {}
-        window.dispatchEvent(new CustomEvent('auth:change', { detail: { user: appUser, profile: appProfile } }));
+        throw new Error('Supabase URL & Anon Key not found. Please ensure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set in your Vercel Environment Variables.');
       }
     } catch (error: any) {
       console.error('Google Sign In Error:', error);
